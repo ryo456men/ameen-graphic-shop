@@ -1133,13 +1133,13 @@
         const thread = hasThread ? app.data.chat.threads[savedIdentity.lastThreadId] : null;
 
         const msgBubble = (m) => {
-          const mine = m.from === 'client';
+          const mine = m.from === 'admin';
           const align = mine ? 'justify-end' : 'justify-start';
-          const bubble = mine ? 'bg-cyan-500/15 border-cyan-400/20 text-cyan-50' : 'bg-slate-900/60 border-slate-700 text-slate-100';
-          const who = mine ? 'You' : (m.from === 'admin' ? 'Admin' : 'System');
+          const bubble = mine ? 'bg-amber-500/10 border-amber-400/20 text-amber-50' : 'bg-slate-900/60 border-slate-700 text-slate-100';
+          const who = mine ? 'Admin' : 'Client';
           return `
             <div class="flex ${align}">
-              <div class="max-w-[85%] rounded-2xl border ${bubble} px-4 py-3">
+              <div class="max-w-[88%] rounded-2xl border ${bubble} px-4 py-3">
                 <div class="flex items-center justify-between gap-3">
                   <div class="text-[11px] font-semibold text-slate-200/90">${escapeHtml(who)}</div>
                   <div class="text-[11px] text-slate-400">${escapeHtml(fmtTime(m.ts))}</div>
@@ -1296,13 +1296,8 @@
                   </ul>
                 </div>
 
-                <div class="mt-6 rounded-xl border border-slate-800 bg-slate-950/30 p-4">
-                  <div class="text-xs font-semibold text-slate-200">Next step</div>
-                  <div class="mt-2 text-sm text-slate-300">After signing in, go to Chat or (if admin) open the Admin dashboard to manage the site.</div>
-                  <div class="mt-4 flex flex-wrap gap-2">
-                    <a href="#/chat" class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-900">Chat</a>
-                    <a href="#/home" class="focus-ring rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-white ring-1 ring-slate-700 hover:bg-white/15">Home</a>
-                  </div>
+                <div class="mt-6 rounded-xl border border-amber-400/15 bg-amber-500/10 p-4 text-xs text-amber-100">
+                  Reminder: Uploading large videos into localStorage can exceed browser limits. Prefer YouTube/MP4 URLs.
                 </div>
               </div>
             </div>
