@@ -1,0 +1,2696 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark light" />
+  <title>Ameen Graphic Design Shop</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+  <!-- =====================
+       CSS (readable + centralized)
+       ===================== -->
+  <style>
+    :root { --glass: rgba(2, 6, 23, .55); }
+
+    /* Small extras on top of Tailwind */
+    .glass { background: var(--glass); backdrop-filter: blur(12px); }
+    .prose-lite p { margin: .75rem 0; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .focus-ring:focus { outline: 2px solid rgba(56, 189, 248, .65); outline-offset: 2px; }
+  </style>
+</head>
+
+<body class="min-h-screen bg-slate-950 text-slate-100 selection:bg-cyan-400/20 selection:text-cyan-100">
+  <noscript>
+    <div class="max-w-3xl mx-auto p-6">
+      <div class="rounded-xl border border-slate-800 bg-slate-900 p-4">
+        This site needs JavaScript enabled to run.
+      </div>
+    </div>
+  </noscript>
+
+  <!-- =====================
+       App shell (HTML only)
+       ===================== -->
+  <div id="app" class="min-h-screen"></div>
+
+  <!-- =====================
+       JavaScript Module #1: CORE (state/storage/utilities)
+       ===================== -->
+  <script>
+    (() => {
+      'use strict';
+
+      // ----------------- Constants -----------------
+      const PRIMARY_ADMIN_EMAIL = 'alakaameen97@gmail.com';
+      const SECONDARY_ADMIN_EMAIL = 'dosunmuayobamidele@gmail.com';
+      // For backwards compatibility, ADMIN_EMAIL refers to the primary admin
+      const ADMIN_EMAIL = PRIMARY_ADMIN_EMAIL;
+
+      const STORAGE_KEYS = {
+        data: 'gdshop_data_v1',
+        accounts: 'gdshop_accounts_v1',
+        session: 'gdshop_session_v1',
+        guest: 'gdshop_guest_v1',
+        chatIdentity: 'gdshop_chat_identity_v1'
+      };
+
+      // ----------------- Utilities -----------------
+      const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+      const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (m) => ESC_MAP[m]);
+
+      const uid = () => Math.random().toString(16).slice(2) + '-' + Date.now().toString(16);
+      const now = () => Date.now();
+
+      function loadJSON(key, fallback) {
+        try {
+          const raw = localStorage.getItem(key);
+          if (!raw) return fallback;
+          return JSON.parse(raw);
+        } catch {
+          return fallback;
+        }
+      }
+
+      function saveJSON(key, value) {
+        localStorage.setItem(key, JSON.stringify(value));
+      }
+
+      function trySaveData(nextData) {
+        try {
+          saveJSON(STORAGE_KEYS.data, nextData);
+          return null;
+        } catch (e) {
+          return e;
+        }
+      }
+
+      async function sha256Hex(input) {
+        const enc = new TextEncoder();
+        const bytes = enc.encode(input);
+        const digest = await crypto.subtle.digest('SHA-256', bytes);
+        return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+      }
+
+      function fmtMoney(amount, currency) {
+        const n = Number(amount);
+        if (!Number.isFinite(n)) return `${currency ?? '$'}0`;
+        return `${currency ?? '$'}${n.toFixed(0)}`;
+      }
+
+      function fmtDate(ts) {
+        try {
+          return new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: '2-digit' }).format(new Date(ts));
+        } catch {
+          return new Date(ts).toLocaleDateString();
+        }
+      }
+
+      function fmtTime(ts) {
+        try {
+          return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date(ts));
+        } catch {
+          return new Date(ts).toLocaleTimeString();
+        }
+      }
+
+      function parseRoute() {
+        const raw = (location.hash || '#/home').slice(1);
+        const [pathRaw, queryRaw] = raw.split('?');
+        const path = pathRaw || '/home';
+        const query = new URLSearchParams(queryRaw || '');
+        return { path, query };
+      }
+
+      function go(path) {
+        if (!path.startsWith('/')) path = '/' + path;
+        location.hash = path;
+      }
+
+      function isAdminEmail(email) {
+        return String(email || '').trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
+      }
+
+      function normalizeYouTubeUrl(url) {
+        const u = String(url || '').trim();
+        if (!u) return null;
+        try {
+          const parsed = new URL(u);
+          const host = parsed.hostname.replace('www.', '');
+          if (host === 'youtu.be') {
+            const id = parsed.pathname.slice(1);
+            if (!id) return null;
+            return `https://www.youtube.com/embed/${id}`;
+          }
+          if (host === 'youtube.com' || host === 'm.youtube.com') {
+            if (parsed.pathname === '/watch') {
+              const id = parsed.searchParams.get('v');
+              if (!id) return null;
+              return `https://www.youtube.com/embed/${id}`;
+            }
+            if (parsed.pathname.startsWith('/embed/')) return u;
+            if (parsed.pathname.startsWith('/shorts/')) {
+              const id = parsed.pathname.split('/').filter(Boolean)[1];
+              if (!id) return null;
+              return `https://www.youtube.com/embed/${id}`;
+            }
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      }
+
+      function inferMediaTypeFromSrc(src) {
+        const s = String(src || '').trim();
+        if (!s) return { mediaType: null, src: '' };
+        const yt = normalizeYouTubeUrl(s);
+        if (yt) return { mediaType: 'embed', src: yt };
+
+        const lower = s.toLowerCase();
+        if (lower.startsWith('data:video/')) return { mediaType: 'video', src: s };
+        if (lower.startsWith('data:image/')) return { mediaType: 'image', src: s };
+        if (lower.endsWith('.mp4') || lower.endsWith('.webm') || lower.endsWith('.ogg')) return { mediaType: 'video', src: s };
+        return { mediaType: 'image', src: s };
+      }
+
+      // ----------------- Data (seed + load) -----------------
+      function seedData() {
+        return {
+          version: 1,
+          updatedAt: now(),
+          site: {
+            brandName: 'Ameen Graphic Design',
+            tagline: 'Branding • Logos • Social Media • Motion Graphics',
+            heroImageUrl: 'https://images.unsplash.com/photo-1526498460520-4c246339dccb?auto=format&fit=crop&w=1800&q=80',
+            about: "We’re a graphic design shop focused on clean visuals, strong branding, and fast turnarounds. From logos and brand systems to social media kits and short motion promos—we help your ideas look professional.",
+            contact: {
+              email: 'contact@yourstudio.com',
+              phone: '+000 000 0000',
+              address: 'Your City, Your Country',
+              whatsapp: ''
+            },
+            socials: {
+              instagram: '',
+              behance: '',
+              tiktok: ''
+            }
+          },
+          services: [
+            {
+              id: uid(),
+              name: 'Logo Starter',
+              price: 49,
+              currency: '$',
+              description: 'Perfect for new projects that need a clean, modern logo.',
+              bullets: ['2 concepts', '2 revisions', 'PNG/SVG files'],
+              popular: false
+            },
+            {
+              id: uid(),
+              name: 'Brand Kit',
+              price: 149,
+              currency: '$',
+              description: 'A complete mini-brand system for consistent visuals.',
+              bullets: ['Logo + variations', 'Color palette + typography', 'Social profile assets'],
+              popular: true
+            },
+            {
+              id: uid(),
+              name: 'Social Media Pack',
+              price: 99,
+              currency: '$',
+              description: 'Templates you can reuse for posts, stories, and promos.',
+              bullets: ['10 templates', 'Editable files', 'Fast delivery'],
+              popular: false
+            }
+          ],
+          discounts: [
+            {
+              id: uid(),
+              title: 'New Client Discount',
+              percent: 10,
+              code: 'HELLO10',
+              until: '2026-12-31',
+              details: 'Valid for first-time clients on any package.',
+              active: true
+            }
+          ],
+          portfolio: [
+            {
+              id: uid(),
+              title: 'Minimal Logo Concept',
+              category: 'Branding',
+              description: 'Minimal mark concept with strong contrast and scalability.',
+              mediaType: 'image',
+              src: 'https://images.unsplash.com/photo-1523726491678-bf852e717f6a?auto=format&fit=crop&w=1400&q=80',
+              createdAt: now()
+            },
+            {
+              id: uid(),
+              title: 'Poster Layout Study',
+              category: 'Print',
+              description: 'Bold typography + grid composition for event posters.',
+              mediaType: 'image',
+              src: 'https://images.unsplash.com/photo-1526481280695-3c687fd5432c?auto=format&fit=crop&w=1400&q=80',
+              createdAt: now()
+            },
+            {
+              id: uid(),
+              title: 'Motion Promo (Sample)',
+              category: 'Motion',
+              description: 'Short promo/intro sample (YouTube embed).',
+              mediaType: 'embed',
+              src: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
+              createdAt: now()
+            }
+          ],
+          inquiries: [],
+          chat: {
+            threads: {}
+          }
+        };
+      }
+
+      function getData() {
+        const existing = loadJSON(STORAGE_KEYS.data, null);
+        if (existing && existing.version === 1) return existing;
+        const seeded = seedData();
+        saveJSON(STORAGE_KEYS.data, seeded);
+        return seeded;
+      }
+
+      function getAccounts() {
+        return loadJSON(STORAGE_KEYS.accounts, { version: 1, users: {} });
+      }
+
+      function getSession() {
+        return loadJSON(STORAGE_KEYS.session, { version: 1, email: null });
+      }
+
+      function setSession(email) {
+        saveJSON(STORAGE_KEYS.session, { version: 1, email });
+      }
+
+      function clearSession() {
+        setSession(null);
+      }
+
+      function getGuest() {
+        const g = loadJSON(STORAGE_KEYS.guest, null);
+        if (g?.id && g?.createdAt) return g;
+        const next = { id: 'guest-' + uid(), createdAt: now() };
+        saveJSON(STORAGE_KEYS.guest, next);
+        return next;
+      }
+
+      // ----------------- App state -----------------
+      const app = {
+        data: getData(),
+        accounts: getAccounts(),
+        session: getSession(),
+        route: parseRoute(),
+        ui: {
+          mobileOpen: false,
+          portfolioFilter: 'All',
+          portfolioDraftMedia: null
+        },
+        toast: null,
+        toastTimer: null
+      };
+
+      // ----------------- Primary behavior helpers -----------------
+      let _renderFn = () => {};
+      function setRender(fn) {
+        _renderFn = typeof fn === 'function' ? fn : () => {};
+      }
+      function requestRender() {
+        try { _renderFn(); } catch { /* ignore */ }
+      }
+
+      function currentUser() {
+        const email = app.session?.email;
+        if (!email) return null;
+        return { email };
+      }
+
+      function userIsAdmin() {
+        const user = currentUser();
+        return !!user && isAdminEmail(user.email);
+      }
+
+      function showToast(message, type = 'info') {
+        app.toast = { message, type, id: uid() };
+        if (app.toastTimer) clearTimeout(app.toastTimer);
+        app.toastTimer = setTimeout(() => {
+          app.toast = null;
+          requestRender();
+        }, 3200);
+        requestRender();
+      }
+
+      function categoriesFromPortfolio() {
+        const cats = new Set(['All']);
+        for (const item of app.data.portfolio) cats.add(item.category || 'Uncategorized');
+        return Array.from(cats);
+      }
+
+      function getActiveDiscounts() {
+        const today = new Date();
+        return (app.data.discounts || []).filter(d => {
+          if (!d.active) return false;
+          if (!d.until) return true;
+          const end = new Date(d.until + 'T23:59:59');
+          return end >= today;
+        });
+      }
+
+      function ensureAdminGuard() {
+        const isAdminRoute = app.route.path.startsWith('/admin');
+        if (isAdminRoute && !userIsAdmin()) {
+          const next = encodeURIComponent(app.route.path + (location.hash.includes('?') ? '?' + location.hash.split('?')[1] : ''));
+          go(`/auth?mode=signin&next=${next}`);
+          return true;
+        }
+        return false;
+      }
+
+      // ----------------- Chat helpers -----------------
+      function clientThreadIdFromEmail(email) {
+        return 'email:' + String(email || '').trim().toLowerCase();
+      }
+
+      function getOrCreateThread(name, email) {
+        const tid = clientThreadIdFromEmail(email);
+        if (!app.data.chat.threads[tid]) {
+          app.data.chat.threads[tid] = {
+            id: tid,
+            name: name || '',
+            email: email || '',
+            createdAt: now(),
+            updatedAt: now(),
+            adminLastReadAt: 0,
+            clientLastReadAt: 0,
+            messages: []
+          };
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) throw err;
+        }
+        return app.data.chat.threads[tid];
+      }
+
+      function addMessageToThread(threadId, from, text) {
+        const t = app.data.chat.threads[threadId];
+        if (!t) return;
+        const msg = { id: uid(), from, text: String(text || '').slice(0, 4000), ts: now() };
+        t.messages.push(msg);
+        t.updatedAt = now();
+        app.data.updatedAt = now();
+        const err = trySaveData(app.data);
+        if (err) throw err;
+      }
+
+      // ----------------- Export core API -----------------
+      window.GDShopCore = {
+        ADMIN_EMAIL,
+        STORAGE_KEYS,
+        // util
+        escapeHtml,
+        uid,
+        now,
+        loadJSON,
+        saveJSON,
+        trySaveData,
+        sha256Hex,
+        fmtMoney,
+        fmtDate,
+        fmtTime,
+        parseRoute,
+        go,
+        isAdminEmail,
+        normalizeYouTubeUrl,
+        inferMediaTypeFromSrc,
+        // data
+        seedData,
+        getData,
+        getAccounts,
+        getSession,
+        setSession,
+        clearSession,
+        getGuest,
+        // state
+        app,
+        // behaviors
+        setRender,
+        requestRender,
+        currentUser,
+        userIsAdmin,
+        showToast,
+        categoriesFromPortfolio,
+        getActiveDiscounts,
+        ensureAdminGuard,
+        // chat
+        clientThreadIdFromEmail,
+        getOrCreateThread,
+        addMessageToThread
+      };
+    })();
+  </script>
+
+  <!-- =====================
+       JavaScript Module #2: VIEWS (page HTML rendering only)
+       ===================== -->
+  <script>
+    (() => {
+      'use strict';
+
+      const Core = window.GDShopCore;
+      const {
+        app,
+        ADMIN_EMAIL,
+        escapeHtml,
+        fmtMoney,
+        fmtDate,
+        fmtTime,
+        now,
+        inferMediaTypeFromSrc,
+        getActiveDiscounts,
+        categoriesFromPortfolio,
+        currentUser,
+        userIsAdmin,
+        getGuest,
+        loadJSON
+      } = Core;
+
+      // ----------------- Small UI helpers -----------------
+      function renderBadge(text) {
+        return `<span class="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-200">${escapeHtml(text)}</span>`;
+      }
+
+      function renderToast() {
+        if (!app.toast) return '';
+        const color = app.toast.type === 'error'
+          ? 'border-rose-600/40 bg-rose-950/60'
+          : app.toast.type === 'success'
+            ? 'border-emerald-600/40 bg-emerald-950/60'
+            : 'border-cyan-600/40 bg-slate-900/60';
+        return `
+          <div class="fixed left-1/2 top-4 z-[60] w-[min(560px,calc(100vw-2rem))] -translate-x-1/2">
+            <div class="glass rounded-xl border ${color} px-4 py-3 shadow-2xl">
+              <div class="flex items-start justify-between gap-3">
+                <div class="text-sm text-slate-100">${escapeHtml(app.toast.message)}</div>
+                <button class="focus-ring rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800" data-action="dismiss-toast">Close</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderNav() {
+        const user = currentUser();
+        const isAdmin = userIsAdmin();
+
+        const link = (to, label) => {
+          const active = app.route.path === to || (to !== '/home' && app.route.path.startsWith(to));
+          const cls = active
+            ? 'text-cyan-200 border-cyan-400/30 bg-cyan-500/10'
+            : 'text-slate-200 border-transparent hover:border-slate-700 hover:bg-slate-900';
+          return `<a href="#${to}" class="rounded-lg border px-3 py-2 text-sm ${cls}">${escapeHtml(label)}</a>`;
+        };
+
+        const adminLink = isAdmin
+          ? `<a href="#/admin" class="rounded-lg border border-transparent px-3 py-2 text-sm text-amber-200 hover:border-amber-400/30 hover:bg-amber-500/10">Admin</a>`
+          : '';
+
+        return `
+          <header class="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/80 backdrop-blur">
+            <div class="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
+              <a href="#/home" class="group flex items-center gap-3">
+                <div class="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-cyan-500/25 to-indigo-500/25 ring-1 ring-slate-700">
+                  <svg class="h-6 w-6 text-cyan-200" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M4 17l6-6 4 4 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M4 7h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                </div>
+                <div class="leading-tight">
+                  <div class="font-semibold tracking-tight text-slate-100 group-hover:text-white">${escapeHtml(app.data.site.brandName)}</div>
+                  <div class="text-xs text-slate-400">${escapeHtml(app.data.site.tagline)}</div>
+                </div>
+              </a>
+
+              <nav class="hidden items-center gap-1 md:flex">
+                ${link('/home', 'Home')}
+                ${link('/portfolio', 'Portfolio')}
+                ${link('/services', 'Services')}
+                ${link('/discounts', 'Discounts')}
+                ${link('/about', 'About')}
+                ${link('/contact', 'Contact')}
+                ${link('/chat', 'Chat')}
+                ${adminLink}
+              </nav>
+
+              <div class="flex items-center gap-2">
+                ${user ? `
+                  <div class="hidden md:flex items-center gap-2">
+                    ${renderBadge(user.email)}
+                    <button class="focus-ring rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800" data-action="signout">Sign out</button>
+                  </div>
+                ` : `
+                  <a href="#/auth?mode=signin" class="hidden md:inline-flex focus-ring rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">Sign in</a>
+                `}
+
+                <button class="focus-ring inline-flex items-center justify-center rounded-lg border border-slate-700 bg-slate-900 p-2 text-slate-200 hover:bg-slate-800 md:hidden" data-action="toggle-mobile" aria-label="Open menu">
+                  <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            ${app.ui.mobileOpen ? `
+              <div class="border-t border-slate-800 bg-slate-950/95">
+                <div class="mx-auto max-w-6xl px-4 py-3">
+                  <div class="grid grid-cols-2 gap-2">
+                    ${link('/home', 'Home')}
+                    ${link('/portfolio', 'Portfolio')}
+                    ${link('/services', 'Services')}
+                    ${link('/discounts', 'Discounts')}
+                    ${link('/about', 'About')}
+                    ${link('/contact', 'Contact')}
+                    ${link('/chat', 'Chat')}
+                    ${isAdmin ? `<a href="#/admin" class="rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">Admin</a>` : (user ? '' : `<a href="#/auth?mode=signin" class="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200">Sign in</a>`)}
+                    ${user ? `<button class="focus-ring rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200" data-action="signout">Sign out</button>` : ''}
+                  </div>
+                </div>
+              </div>
+            ` : ''}
+          </header>
+        `;
+      }
+
+      function renderFooter() {
+        const year = new Date().getFullYear();
+        const s = app.data.site;
+        const contact = s.contact || {};
+        const socials = s.socials || {};
+
+        const socialLink = (label, url) => {
+          if (!url) return '';
+          const safe = escapeHtml(url);
+          return `<a class="text-sm text-slate-300 hover:text-white" href="${safe}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
+        };
+
+        return `
+          <footer class="border-t border-slate-800 bg-slate-950">
+            <div class="mx-auto max-w-6xl px-4 py-10">
+              <div class="grid gap-8 md:grid-cols-3">
+                <div>
+                  <div class="text-base font-semibold">${escapeHtml(s.brandName)}</div>
+                  <div class="mt-2 text-sm text-slate-400">${escapeHtml(s.tagline)}</div>
+                  <div class="mt-4 text-xs text-slate-500">
+                    This demo stores content (portfolio/uploads/chat) in your browser’s localStorage.
+                    For real multi-user hosting, connect it to a backend.
+                  </div>
+                </div>
+                <div>
+                  <div class="text-sm font-semibold text-slate-200">Quick links</div>
+                  <div class="mt-3 grid gap-2">
+                    <a class="text-sm text-slate-300 hover:text-white" href="#/portfolio">Portfolio</a>
+                    <a class="text-sm text-slate-300 hover:text-white" href="#/services">Services</a>
+                    <a class="text-sm text-slate-300 hover:text-white" href="#/discounts">Discounts</a>
+                    <a class="text-sm text-slate-300 hover:text-white" href="#/chat">Chat with us</a>
+                  </div>
+                </div>
+                <div>
+                  <div class="text-sm font-semibold text-slate-200">Contact</div>
+                  <div class="mt-3 grid gap-2 text-sm text-slate-300">
+                    <div><span class="text-slate-500">Email:</span> ${escapeHtml(contact.email || '')}</div>
+                    <div><span class="text-slate-500">Phone:</span> ${escapeHtml(contact.phone || '')}</div>
+                    <div><span class="text-slate-500">Address:</span> ${escapeHtml(contact.address || '')}</div>
+                  </div>
+                  <div class="mt-4 flex flex-wrap gap-3">
+                    ${socialLink('Instagram', socials.instagram)}
+                    ${socialLink('Behance', socials.behance)}
+                    ${socialLink('TikTok', socials.tiktok)}
+                  </div>
+                </div>
+              </div>
+              <div class="mt-10 flex flex-col gap-2 border-t border-slate-800 pt-6 text-xs text-slate-500 md:flex-row md:items-center md:justify-between">
+                <div>© ${year} ${escapeHtml(s.brandName)}. All rights reserved.</div>
+                <div class="flex gap-3">
+                  <a class="hover:text-slate-300" href="#/about">About</a>
+                  <a class="hover:text-slate-300" href="#/contact">Contact</a>
+                  <a class="hover:text-slate-300" href="#/auth?mode=signin">Account</a>
+                </div>
+              </div>
+            </div>
+          </footer>
+        `;
+      }
+
+      // ----------------- Media component -----------------
+      function renderMedia(item, heightClass = 'h-56') {
+        const { mediaType, src } = inferMediaTypeFromSrc(item?.src);
+        const common = `${heightClass} w-full object-cover`;
+
+        if (mediaType === 'embed') {
+          return `
+            <div class="${heightClass} w-full bg-slate-950">
+              <iframe class="${heightClass} w-full" src="${escapeHtml(src)}" title="${escapeHtml(item?.title || 'Video')}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+            </div>
+          `;
+        }
+        if (mediaType === 'video') {
+          return `<video class="${common} bg-slate-950" src="${escapeHtml(src)}" controls playsinline preload="metadata"></video>`;
+        }
+        return `<img class="${common} bg-slate-950" src="${escapeHtml(src)}" alt="${escapeHtml(item?.title || 'Portfolio media')}" loading="lazy" />`;
+      }
+
+      // ----------------- Pages (HTML generation) -----------------
+      function renderHero() {
+        const s = app.data.site;
+        const discounts = getActiveDiscounts();
+        const best = discounts[0];
+
+        const badge = best ? `
+          <div class="inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-500/10 px-3 py-1 text-xs text-cyan-100">
+            <span class="font-semibold">${escapeHtml(best.title)}</span>
+            <span class="text-cyan-200">•</span>
+            <span>${escapeHtml(best.percent)}% OFF</span>
+            <span class="text-cyan-200">•</span>
+            <span>Code: <span class="font-mono">${escapeHtml(best.code)}</span></span>
+          </div>
+        ` : '';
+
+        const bg = s.heroImageUrl ? `
+          <div class="absolute inset-0 -z-10">
+            <img src="${escapeHtml(s.heroImageUrl)}" alt="" class="h-full w-full object-cover opacity-25" />
+            <div class="absolute inset-0 bg-gradient-to-b from-slate-950/40 via-slate-950/70 to-slate-950"></div>
+          </div>
+        ` : '';
+
+        return `
+          <section class="relative overflow-hidden">
+            ${bg}
+            <div class="mx-auto max-w-6xl px-4 py-16 md:py-20">
+              <div class="grid gap-10 md:grid-cols-2 md:items-center">
+                <div>
+                  ${badge}
+                  <h1 class="mt-5 text-3xl font-semibold tracking-tight text-white md:text-5xl">Design that makes your brand look premium.</h1>
+                  <p class="mt-4 max-w-xl text-base text-slate-300 md:text-lg">
+                    Logos, full brand kits, social media designs, posters, and motion promos—fast delivery and clean results.
+                  </p>
+                  <div class="mt-7 flex flex-wrap gap-3">
+                    <a href="#/portfolio" class="focus-ring inline-flex items-center justify-center rounded-xl bg-cyan-500 px-5 py-3 text-sm font-semibold text-slate-950 hover:bg-cyan-400">View Portfolio</a>
+                    <a href="#/chat" class="focus-ring inline-flex items-center justify-center rounded-xl border border-slate-700 bg-slate-900/60 px-5 py-3 text-sm font-semibold text-slate-100 hover:bg-slate-900">Chat With Us</a>
+                    <a href="#/services" class="focus-ring inline-flex items-center justify-center rounded-xl border border-slate-700 bg-slate-900/30 px-5 py-3 text-sm font-semibold text-slate-100 hover:bg-slate-900">See Packages</a>
+                  </div>
+
+                  <div class="mt-8 grid grid-cols-3 gap-3">
+                    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+                      <div class="text-sm font-semibold text-white">Fast</div>
+                      <div class="mt-1 text-xs text-slate-400">Quick turnaround</div>
+                    </div>
+                    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+                      <div class="text-sm font-semibold text-white">Modern</div>
+                      <div class="mt-1 text-xs text-slate-400">Clean visuals</div>
+                    </div>
+                    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+                      <div class="text-sm font-semibold text-white">Flexible</div>
+                      <div class="mt-1 text-xs text-slate-400">Custom requests</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-5 shadow-2xl">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <div class="text-sm font-semibold text-white">Request a quick quote</div>
+                      <div class="mt-1 text-xs text-slate-400">It’s saved for the admin to review.</div>
+                    </div>
+                    <div class="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-1 text-xs text-slate-300">No spam</div>
+                  </div>
+                  <form id="form-quick-quote" class="mt-4 grid gap-3">
+                    <div class="grid gap-3 sm:grid-cols-2">
+                      <label class="grid gap-1">
+                        <span class="text-xs text-slate-300">Name</span>
+                        <input name="name" class="focus-ring w-full rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="Your name" required />
+                      </label>
+                      <label class="grid gap-1">
+                        <span class="text-xs text-slate-300">Email</span>
+                        <input name="email" type="email" class="focus-ring w-full rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="you@email.com" required />
+                      </label>
+                    </div>
+                    <label class="grid gap-1">
+                      <span class="text-xs text-slate-300">What do you need?</span>
+                      <select name="service" class="focus-ring w-full rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm">
+                        <option>Logo</option>
+                        <option>Brand kit</option>
+                        <option>Social media pack</option>
+                        <option>Poster / flyer</option>
+                        <option>Motion promo</option>
+                        <option>Other</option>
+                      </select>
+                    </label>
+                    <label class="grid gap-1">
+                      <span class="text-xs text-slate-300">Details</span>
+                      <textarea name="message" rows="4" class="focus-ring w-full resize-none rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="Describe your project (style, deadline, references)…" required></textarea>
+                    </label>
+                    <button class="focus-ring rounded-xl bg-white/10 px-4 py-2.5 text-sm font-semibold text-white ring-1 ring-slate-700 hover:bg-white/15" type="submit">Send request</button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
+      function renderCallouts() {
+        return `
+          <section class="mx-auto max-w-6xl px-4 pb-14">
+            <div class="grid gap-4 md:grid-cols-3">
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+                <div class="text-sm font-semibold text-white">What you get</div>
+                <ul class="mt-3 grid gap-2 text-sm text-slate-300">
+                  <li>• Clean design + modern typography</li>
+                  <li>• Revisions included</li>
+                  <li>• Ready-for-use files</li>
+                </ul>
+              </div>
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+                <div class="text-sm font-semibold text-white">Best way to start</div>
+                <div class="mt-3 text-sm text-slate-300">Open the chat and tell us what you need. We’ll guide you to the right package.</div>
+                <a class="mt-4 inline-flex text-sm font-semibold text-cyan-200 hover:text-cyan-100" href="#/chat">Go to chat →</a>
+              </div>
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+                <div class="text-sm font-semibold text-white">Admin-only</div>
+                <div class="mt-3 text-sm text-slate-300">Admin pages appear only when signed in with <span class="font-mono">${escapeHtml(ADMIN_EMAIL)}</span>.</div>
+                <a class="mt-4 inline-flex text-sm font-semibold text-slate-200 hover:text-white" href="#/auth?mode=signup">Create/Sign in →</a>
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
+      function renderFeaturedPortfolio() {
+        const items = [...(app.data.portfolio || [])]
+          .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+          .slice(0, 6);
+
+        const card = (item) => {
+          const media = renderMedia(item, 'h-40');
+          return `
+            <article class="group overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/40">
+              <div class="relative">${media}</div>
+              <div class="p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm font-semibold text-white">${escapeHtml(item.title)}</div>
+                  <div class="text-xs text-slate-400">${escapeHtml(item.category || 'Uncategorized')}</div>
+                </div>
+                <div class="mt-2 line-clamp-2 text-sm text-slate-300">${escapeHtml(item.description || '')}</div>
+              </div>
+            </article>
+          `;
+        };
+
+        return `
+          <section class="mx-auto max-w-6xl px-4 py-12">
+            <div class="flex items-end justify-between gap-4">
+              <div>
+                <h2 class="text-xl font-semibold text-white">Featured work</h2>
+                <p class="mt-1 text-sm text-slate-400">A quick look at recent designs.</p>
+              </div>
+              <a href="#/portfolio" class="text-sm text-cyan-200 hover:text-cyan-100">View all →</a>
+            </div>
+
+            <div class="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              ${items.map(card).join('') || `<div class="rounded-xl border border-slate-800 bg-slate-900/40 p-6 text-sm text-slate-300">No portfolio items yet. Admin can add them in the Admin dashboard.</div>`}
+            </div>
+          </section>
+        `;
+      }
+
+      function renderHome() {
+        const discounts = getActiveDiscounts();
+        const discountStrip = discounts.length ? `
+          <section class="mx-auto max-w-6xl px-4 pb-4">
+            <div class="rounded-2xl border border-cyan-400/20 bg-cyan-500/10 p-5">
+              <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div class="text-sm font-semibold text-white">Discounts available</div>
+                  <div class="mt-1 text-sm text-cyan-100/90">Use these codes at checkout / in chat.</div>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  ${discounts.slice(0, 3).map(d => `
+                    <div class="rounded-xl border border-cyan-400/25 bg-slate-950/40 px-3 py-2 text-xs text-cyan-100">
+                      <span class="font-semibold">${escapeHtml(d.percent)}% OFF</span> • <span class="font-mono">${escapeHtml(d.code)}</span>
+                    </div>
+                  `).join('')}
+                  <a href="#/discounts" class="rounded-xl border border-cyan-400/25 bg-slate-950/30 px-3 py-2 text-xs text-cyan-100 hover:bg-slate-950/40">View details</a>
+                </div>
+              </div>
+            </div>
+          </section>
+        ` : '';
+
+        return `
+          ${renderHero()}
+          ${discountStrip}
+          ${renderFeaturedPortfolio()}
+          ${renderCallouts()}
+        `;
+      }
+
+      function renderPortfolio() {
+        const cats = categoriesFromPortfolio();
+        const active = app.ui.portfolioFilter;
+
+        const items = (app.data.portfolio || [])
+          .filter(i => active === 'All' ? true : (i.category || 'Uncategorized') === active)
+          .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+        const chip = (c) => {
+          const on = c === active;
+          const cls = on ? 'border-cyan-400/30 bg-cyan-500/10 text-cyan-100' : 'border-slate-700 bg-slate-900/40 text-slate-200 hover:bg-slate-900';
+          return `<button class="focus-ring rounded-full border px-3 py-1.5 text-xs ${cls}" data-action="set-portfolio-filter" data-filter="${escapeHtml(c)}">${escapeHtml(c)}</button>`;
+        };
+
+        const card = (item) => `
+          <article class="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/40">
+            <div class="relative">${renderMedia(item, 'h-48')}</div>
+            <div class="p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-semibold text-white">${escapeHtml(item.title)}</div>
+                  <div class="mt-1 text-xs text-slate-400">${escapeHtml(item.category || 'Uncategorized')} • ${fmtDate(item.createdAt || now())}</div>
+                </div>
+                ${renderBadge((inferMediaTypeFromSrc(item.src).mediaType || 'media').toUpperCase())}
+              </div>
+              ${item.description ? `<div class="mt-3 text-sm text-slate-300">${escapeHtml(item.description)}</div>` : ''}
+            </div>
+          </article>
+        `;
+
+        return `
+          <section class="mx-auto max-w-6xl px-4 py-12">
+            <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div>
+                <h1 class="text-2xl font-semibold text-white">Portfolio</h1>
+                <p class="mt-1 text-sm text-slate-400">Images & videos added by the admin. Filter by category.</p>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                ${cats.map(chip).join('')}
+              </div>
+            </div>
+
+            <div class="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              ${items.length ? items.map(card).join('') : `
+                <div class="sm:col-span-2 lg:col-span-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-6 text-sm text-slate-300">
+                  No items found for this category.
+                </div>
+              `}
+            </div>
+          </section>
+        `;
+      }
+
+      function renderServices() {
+        const services = [...(app.data.services || [])];
+        const card = (s) => `
+          <article class="rounded-2xl border ${s.popular ? 'border-cyan-400/30 bg-cyan-500/10' : 'border-slate-800 bg-slate-900/40'} p-5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <h2 class="text-base font-semibold text-white">${escapeHtml(s.name)}</h2>
+                <p class="mt-1 text-sm text-slate-300">${escapeHtml(s.description || '')}</p>
+              </div>
+              ${s.popular ? `<span class="rounded-full border border-cyan-400/30 bg-slate-950/30 px-2.5 py-1 text-xs font-semibold text-cyan-100">Popular</span>` : ''}
+            </div>
+            <div class="mt-4 flex items-baseline gap-2">
+              <div class="text-3xl font-semibold text-white">${escapeHtml(fmtMoney(s.price, s.currency))}</div>
+              <div class="text-xs text-slate-400">starting</div>
+            </div>
+            <ul class="mt-4 grid gap-2 text-sm text-slate-300">
+              ${(s.bullets || []).map(b => `<li>• ${escapeHtml(b)}</li>`).join('')}
+            </ul>
+            <div class="mt-5 flex flex-wrap gap-2">
+              <a href="#/chat" class="focus-ring rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-white ring-1 ring-slate-700 hover:bg-white/15">Ask in chat</a>
+              <a href="#/contact" class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-900">Contact</a>
+            </div>
+          </article>
+        `;
+
+        return `
+          <section class="mx-auto max-w-6xl px-4 py-12">
+            <div>
+              <h1 class="text-2xl font-semibold text-white">Services & packages</h1>
+              <p class="mt-1 text-sm text-slate-400">Choose a package or message us for a custom quote.</p>
+            </div>
+
+            <div class="mt-7 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              ${services.map(card).join('') || `<div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6 text-sm text-slate-300">No services yet.</div>`}
+            </div>
+
+            <div class="mt-10 rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+              <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div class="text-base font-semibold text-white">Need something special?</div>
+                  <div class="mt-1 text-sm text-slate-300">We can do banners, thumbnails, business cards, UI mockups, and more.</div>
+                </div>
+                <a href="#/chat" class="focus-ring inline-flex items-center justify-center rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400">Start chat</a>
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
+      function renderDiscounts() {
+        const list = [...(app.data.discounts || [])].sort((a, b) => String(b.active).localeCompare(String(a.active)));
+
+        const card = (d) => {
+          const active = getActiveDiscounts().some(x => x.id === d.id);
+          return `
+            <article class="rounded-2xl border ${active ? 'border-cyan-400/25 bg-cyan-500/10' : 'border-slate-800 bg-slate-900/40'} p-5">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-base font-semibold text-white">${escapeHtml(d.title || 'Discount')}</div>
+                  <div class="mt-1 text-sm text-slate-300">${escapeHtml(d.details || '')}</div>
+                </div>
+                <div class="rounded-xl border border-slate-700 bg-slate-950/30 px-3 py-2 text-right">
+                  <div class="text-xl font-semibold text-white">${escapeHtml(d.percent)}%</div>
+                  <div class="text-[11px] text-slate-400">OFF</div>
+                </div>
+              </div>
+              <div class="mt-4 flex flex-wrap items-center gap-2">
+                <div class="rounded-xl border border-slate-700 bg-slate-950/30 px-3 py-2 text-sm">Code: <span class="font-mono font-semibold text-cyan-200">${escapeHtml(d.code)}</span></div>
+                <div class="text-xs text-slate-400">Valid until: ${escapeHtml(d.until || '—')}</div>
+                ${active
+                  ? `<span class="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-200">Active</span>`
+                  : `<span class="rounded-full border border-slate-700 bg-slate-900/40 px-2.5 py-1 text-xs text-slate-300">Inactive/Expired</span>`}
+              </div>
+              <div class="mt-4">
+                <a href="#/chat" class="focus-ring inline-flex rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-white ring-1 ring-slate-700 hover:bg-white/15">Use in chat</a>
+              </div>
+            </article>
+          `;
+        };
+
+        return `
+          <section class="mx-auto max-w-6xl px-4 py-12">
+            <div>
+              <h1 class="text-2xl font-semibold text-white">Discounts</h1>
+              <p class="mt-1 text-sm text-slate-400">Promos set by admin. Ask in chat if you’re not sure what applies to your project.</p>
+            </div>
+
+            <div class="mt-7 grid gap-4 md:grid-cols-2">
+              ${list.length ? list.map(card).join('') : `<div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6 text-sm text-slate-300">No discounts posted.</div>`}
+            </div>
+          </section>
+        `;
+      }
+
+      function renderAbout() {
+        const s = app.data.site;
+        return `
+          <section class="mx-auto max-w-6xl px-4 py-12">
+            <div class="grid gap-8 md:grid-cols-2 md:items-start">
+              <div>
+                <h1 class="text-2xl font-semibold text-white">About us</h1>
+                <div class="prose-lite mt-4 text-sm text-slate-300">
+                  ${escapeHtml(s.about || '').split('\n').map(p => `<p>${p || ''}</p>`).join('')}
+                </div>
+                <div class="mt-6 rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+                  <div class="text-sm font-semibold text-white">How we work</div>
+                  <ol class="mt-3 grid gap-2 text-sm text-slate-300">
+                    <li>1) You send examples + what you want.</li>
+                    <li>2) We deliver first draft fast.</li>
+                    <li>3) Revisions until you’re happy (within package).</li>
+                    <li>4) You receive final files + formats.</li>
+                  </ol>
+                </div>
+              </div>
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+                <div class="text-sm font-semibold text-white">Why clients choose us</div>
+                <div class="mt-4 grid gap-3">
+                  <div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                    <div class="text-sm font-semibold text-white">Clear communication</div>
+                    <div class="mt-1 text-sm text-slate-300">Fast replies via the chat page.</div>
+                  </div>
+                  <div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                    <div class="text-sm font-semibold text-white">High quality deliverables</div>
+                    <div class="mt-1 text-sm text-slate-300">Print-ready + web-ready files.</div>
+                  </div>
+                  <div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                    <div class="text-sm font-semibold text-white">Fair pricing</div>
+                    <div class="mt-1 text-sm text-slate-300">Packages + discounts for new clients.</div>
+                  </div>
+                </div>
+                <div class="mt-6">
+                  <a href="#/contact" class="focus-ring inline-flex rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400">Contact</a>
+                  <a href="#/portfolio" class="ml-2 focus-ring inline-flex rounded-xl border border-slate-700 bg-slate-900/30 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-slate-900">Portfolio</a>
+                </div>
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
+      function renderContact() {
+        const c = app.data.site.contact || {};
+        return `
+          <section class="mx-auto max-w-6xl px-4 py-12">
+            <div class="grid gap-8 lg:grid-cols-2">
+              <div>
+                <h1 class="text-2xl font-semibold text-white">Contact</h1>
+                <p class="mt-1 text-sm text-slate-400">Send a message. It’s saved to the admin inbox.</p>
+
+                <div class="mt-6 grid gap-3">
+                  <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+                    <div class="text-sm font-semibold text-white">Direct</div>
+                    <div class="mt-3 grid gap-2 text-sm text-slate-300">
+                      <div><span class="text-slate-500">Email:</span> ${escapeHtml(c.email || '')}</div>
+                      <div><span class="text-slate-500">Phone:</span> ${escapeHtml(c.phone || '')}</div>
+                      <div><span class="text-slate-500">Address:</span> ${escapeHtml(c.address || '')}</div>
+                    </div>
+                    <div class="mt-4 flex flex-wrap gap-2">
+                      ${c.email ? `<a class="focus-ring rounded-xl border border-slate-700 bg-slate-950/30 px-4 py-2 text-sm text-slate-200 hover:bg-slate-950/45" href="mailto:${escapeHtml(c.email)}">Email us</a>` : ''}
+                      ${c.whatsapp ? `<a class="focus-ring rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-200 hover:bg-emerald-500/15" href="${escapeHtml(c.whatsapp)}" target="_blank" rel="noreferrer">WhatsApp</a>` : ''}
+                      <a class="focus-ring rounded-xl border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-100 hover:bg-cyan-500/15" href="#/chat">Live chat</a>
+                    </div>
+                  </div>
+
+                  <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+                    <div class="text-sm font-semibold text-white">Business hours</div>
+                    <div class="mt-2 text-sm text-slate-300">Daily: 9:00 AM – 10:00 PM (adjust in Admin → Site settings)</div>
+                    <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/30 p-4 text-xs text-slate-400">Tip: For fastest replies, use the chat page.</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+                <div class="text-sm font-semibold text-white">Contact form</div>
+                <form id="form-contact" class="mt-4 grid gap-3">
+                  <div class="grid gap-3 sm:grid-cols-2">
+                    <label class="grid gap-1">
+                      <span class="text-xs text-slate-300">Name</span>
+                      <input name="name" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" required />
+                    </label>
+                    <label class="grid gap-1">
+                      <span class="text-xs text-slate-300">Email</span>
+                      <input name="email" type="email" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" required />
+                    </label>
+                  </div>
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Subject</span>
+                    <input name="subject" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="e.g., Brand kit request" required />
+                  </label>
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Message</span>
+                    <textarea name="message" rows="6" class="focus-ring resize-none rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" required></textarea>
+                  </label>
+
+                  <button class="focus-ring rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400" type="submit">Send</button>
+                  <div class="text-xs text-slate-500">Saved in-browser for the admin to review (local demo).</div>
+                </form>
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
+      function renderChat() {
+        const user = currentUser();
+        const defaultEmail = user?.email || '';
+
+        const guest = getGuest();
+        const savedIdentity = loadJSON(Core.STORAGE_KEYS.chatIdentity, { name: '', email: defaultEmail, lastThreadId: null });
+        const preName = savedIdentity.name || '';
+        const preEmail = savedIdentity.email || defaultEmail;
+
+        const hasThread = savedIdentity.lastThreadId && app.data.chat.threads[savedIdentity.lastThreadId];
+        const thread = hasThread ? app.data.chat.threads[savedIdentity.lastThreadId] : null;
+
+        const msgBubble = (m) => {
+          const mine = m.from === 'client';
+          const align = mine ? 'justify-end' : 'justify-start';
+          const bubble = mine ? 'bg-cyan-500/15 border-cyan-400/20 text-cyan-50' : 'bg-slate-900/60 border-slate-700 text-slate-100';
+          const who = mine ? 'You' : (m.from === 'admin' ? 'Admin' : 'System');
+          return `
+            <div class="flex ${align}">
+              <div class="max-w-[85%] rounded-2xl border ${bubble} px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-[11px] font-semibold text-slate-200/90">${escapeHtml(who)}</div>
+                  <div class="text-[11px] text-slate-400">${escapeHtml(fmtTime(m.ts))}</div>
+                </div>
+                <div class="mt-1 whitespace-pre-wrap text-sm leading-relaxed">${escapeHtml(m.text)}</div>
+              </div>
+            </div>
+          `;
+        };
+
+        const messagesHtml = thread
+          ? (thread.messages || []).map(msgBubble).join('')
+          : `
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6 text-sm text-slate-300">
+              Start a chat by entering your name + email. Messages are saved in your browser (local demo).
+            </div>
+          `;
+
+        return `
+          <section class="mx-auto max-w-6xl px-4 py-12">
+            <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div>
+                <h1 class="text-2xl font-semibold text-white">Chat</h1>
+                <p class="mt-1 text-sm text-slate-400">Talk with the designer. In this demo, chat works in the same browser using localStorage.</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                ${user ? renderBadge('Signed in') : renderBadge('Guest')}
+                ${renderBadge(guest.id)}
+              </div>
+            </div>
+
+            <div class="mt-7 grid gap-4 lg:grid-cols-3">
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+                <div class="text-sm font-semibold text-white">Your info</div>
+                <form id="form-chat-identify" class="mt-4 grid gap-3">
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Name</span>
+                    <input name="name" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(preName)}" placeholder="Your name" required />
+                  </label>
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Email</span>
+                    <input name="email" type="email" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(preEmail)}" placeholder="you@email.com" required />
+                  </label>
+                  <button class="focus-ring rounded-xl bg-white/10 px-4 py-2.5 text-sm font-semibold text-white ring-1 ring-slate-700 hover:bg-white/15" type="submit">Open chat</button>
+                  <div class="text-xs text-slate-500">Tip: Use the same email to return to the same conversation.</div>
+                </form>
+
+                <div class="mt-6 rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                  <div class="text-xs font-semibold text-slate-200">Quick prompts</div>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <button class="focus-ring rounded-full border border-slate-700 bg-slate-900/40 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-900" data-action="chat-prompt" data-text="Hi! I need a logo. What’s the turnaround time?">Logo turnaround</button>
+                    <button class="focus-ring rounded-full border border-slate-700 bg-slate-900/40 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-900" data-action="chat-prompt" data-text="Hello! Can you design social media templates?">Social templates</button>
+                    <button class="focus-ring rounded-full border border-slate-700 bg-slate-900/40 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-900" data-action="chat-prompt" data-text="Do you have any discounts available right now?">Discounts</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="lg:col-span-2 rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div class="text-sm font-semibold text-white">Conversation</div>
+                    <div class="mt-1 text-xs text-slate-400">${thread ? `Chatting as ${escapeHtml(thread.name || 'Client')} (${escapeHtml(thread.email || '')})` : 'Not connected'}</div>
+                  </div>
+                  <div class="text-xs text-slate-500">Admin replies appear in this browser.</div>
+                </div>
+
+                <div id="chat-messages" class="no-scrollbar mt-4 h-[420px] overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                  <div class="grid gap-3">${messagesHtml}</div>
+                </div>
+
+                <form id="form-chat-send" class="mt-4 flex gap-2">
+                  <input name="text" class="focus-ring w-full rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="Write a message…" ${thread ? '' : 'disabled'} required />
+                  <button class="focus-ring rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50" type="submit" ${thread ? '' : 'disabled'}>Send</button>
+                </form>
+
+                ${thread ? `<div class="mt-3 text-xs text-slate-500">Your chat id: <span class="font-mono">${escapeHtml(thread.id)}</span></div>` : ''}
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
+      function renderAuth() {
+        const mode = app.route.query.get('mode') || 'signin';
+        const next = app.route.query.get('next') || '';
+        const user = currentUser();
+
+        if (user) {
+          return `
+            <section class="mx-auto max-w-3xl px-4 py-12">
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+                <div class="text-xl font-semibold text-white">You’re signed in</div>
+                <div class="mt-2 text-sm text-slate-300">Signed in as <span class="font-mono">${escapeHtml(user.email)}</span>.</div>
+                <div class="mt-6 flex flex-wrap gap-2">
+                  <a href="#/home" class="focus-ring rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400">Go home</a>
+                  ${userIsAdmin() ? `<a href="#/admin" class="focus-ring rounded-xl border border-amber-400/20 bg-amber-500/10 px-4 py-2.5 text-sm font-semibold text-amber-200 hover:bg-amber-500/15">Open Admin</a>` : ''}
+                  <button class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-slate-900" data-action="signout">Sign out</button>
+                </div>
+              </div>
+            </section>
+          `;
+        }
+
+        const tab = (m, label) => {
+          const on = m === mode;
+          const cls = on ? 'bg-slate-950/40 border-cyan-400/30 text-cyan-100' : 'border-slate-700 bg-slate-900/40 text-slate-200 hover:bg-slate-900';
+          return `<a href="#/auth?mode=${m}${next ? `&next=${encodeURIComponent(next)}` : ''}" class="focus-ring rounded-xl border px-4 py-2 text-sm font-semibold ${cls}">${escapeHtml(label)}</a>`;
+        };
+
+        return `
+          <section class="mx-auto max-w-5xl px-4 py-12">
+            <div class="grid gap-4 lg:grid-cols-2">
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+                <div class="text-2xl font-semibold text-white">Account</div>
+                <div class="mt-2 text-sm text-slate-300">Create an account to save identity for chat. Admin access is restricted to <span class="font-mono">${escapeHtml(ADMIN_EMAIL)}</span>.</div>
+                <div class="mt-5 flex flex-wrap gap-2">${tab('signin', 'Sign in')}${tab('signup', 'Create account')}</div>
+
+                ${mode === 'signup' ? `
+                  <form id="form-signup" class="mt-6 grid gap-3">
+                    <label class="grid gap-1">
+                      <span class="text-xs text-slate-300">Email</span>
+                      <input name="email" type="email" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="you@email.com" required />
+                    </label>
+                    <label class="grid gap-1">
+                      <span class="text-xs text-slate-300">Password</span>
+                      <input name="password" type="password" minlength="6" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="Minimum 6 characters" required />
+                    </label>
+                    <button class="focus-ring rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400" type="submit">Create account</button>
+                    <div class="text-xs text-slate-500">Stored locally in this browser (demo). For real security, use OAuth/backends.</div>
+                  </form>
+                ` : `
+                  <form id="form-signin" class="mt-6 grid gap-3">
+                    <label class="grid gap-1">
+                      <span class="text-xs text-slate-300">Email</span>
+                      <input name="email" type="email" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="you@email.com" required />
+                    </label>
+                    <label class="grid gap-1">
+                      <span class="text-xs text-slate-300">Password</span>
+                      <input name="password" type="password" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="Your password" required />
+                    </label>
+                    <button class="focus-ring rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400" type="submit">Sign in</button>
+                    <div class="text-xs text-slate-500">If you don’t have an account, create one in the tab above.</div>
+                  </form>
+                `}
+              </div>
+
+              <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+                <div class="text-base font-semibold text-white">Admin rules</div>
+                <div class="mt-3 text-sm text-slate-300">
+                  <ul class="grid gap-2">
+                    <li>• Admin pages are visible <b>only</b> when signed in as <span class="font-mono">${escapeHtml(ADMIN_EMAIL)}</span>.</li>
+                    <li>• In this demo we can’t verify Gmail ownership (no Google OAuth here).</li>
+                    <li>• Uploads (photos/videos) are stored in <b>localStorage</b>, so keep files small or use URLs (YouTube/MP4 links).</li>
+                  </ul>
+                </div>
+
+                <div class="mt-6 rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                  <div class="text-xs font-semibold text-slate-200">Next step</div>
+                  <div class="mt-2 text-sm text-slate-300">After signing in, go to Chat or (if admin) open the Admin dashboard to manage the site.</div>
+                  <div class="mt-4 flex flex-wrap gap-2">
+                    <a href="#/chat" class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-900">Chat</a>
+                    <a href="#/home" class="focus-ring rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-white ring-1 ring-slate-700 hover:bg-white/15">Home</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
+      // Admin pages are quite large; for readability we keep them as separate view-only functions.
+      function renderAdmin() {
+        const sub = app.route.path.replace('/admin', '') || '/overview';
+
+        const counts = {
+          portfolio: app.data.portfolio?.length || 0,
+          services: app.data.services?.length || 0,
+          discounts: app.data.discounts?.length || 0,
+          inquiries: app.data.inquiries?.length || 0,
+          threads: Object.keys(app.data.chat?.threads || {}).length
+        };
+
+        const tabs = [
+          { to: '/admin/overview', label: 'Overview' },
+          { to: '/admin/portfolio', label: `Portfolio (${counts.portfolio})` },
+          { to: '/admin/services', label: `Services (${counts.services})` },
+          { to: '/admin/discounts', label: `Discounts (${counts.discounts})` },
+          { to: '/admin/site', label: 'Site settings' },
+          { to: '/admin/inquiries', label: `Inquiries (${counts.inquiries})` },
+          { to: '/admin/inbox', label: `Chat inbox (${counts.threads})` },
+          { to: '/admin/backup', label: 'Backup' }
+        ];
+
+        const tab = (t) => {
+          const on = app.route.path === t.to;
+          const cls = on ? 'border-amber-400/30 bg-amber-500/10 text-amber-100' : 'border-slate-700 bg-slate-900/40 text-slate-200 hover:bg-slate-900';
+          return `<a href="#${t.to}" class="focus-ring rounded-xl border px-3 py-2 text-sm ${cls}">${escapeHtml(t.label)}</a>`;
+        };
+
+        const panel = (() => {
+          switch (app.route.path) {
+            case '/admin':
+            case '/admin/overview':
+              return renderAdminOverview();
+            case '/admin/portfolio':
+              return renderAdminPortfolio();
+            case '/admin/services':
+              return renderAdminServices();
+            case '/admin/discounts':
+              return renderAdminDiscounts();
+            case '/admin/site':
+              return renderAdminSite();
+            case '/admin/inquiries':
+              return renderAdminInquiries();
+            case '/admin/inbox':
+              return renderAdminInbox();
+            case '/admin/backup':
+              return renderAdminBackup();
+            default:
+              return `<div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6 text-sm text-slate-300">Unknown admin page.</div>`;
+          }
+        })();
+
+        return `
+          <section class="mx-auto max-w-6xl px-4 py-12">
+            <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div>
+                <h1 class="text-2xl font-semibold text-white">Admin dashboard</h1>
+                <p class="mt-1 text-sm text-slate-400">Manage portfolio uploads (photos/videos), services, discounts, site text, and messages.</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                ${renderBadge(ADMIN_EMAIL)}
+                <button class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-3 py-2 text-sm text-slate-200 hover:bg-slate-900" data-action="signout">Sign out</button>
+              </div>
+            </div>
+
+            <div class="mt-6 flex flex-wrap gap-2">${tabs.map(tab).join('')}</div>
+            <div class="mt-6">${panel}</div>
+          </section>
+        `;
+      }
+
+      function renderAdminOverview() {
+        const d = app.data;
+        const activeDiscounts = getActiveDiscounts().length;
+        const lastUpdate = d.updatedAt ? fmtDate(d.updatedAt) : '—';
+
+        return `
+          <div class="grid gap-4 lg:grid-cols-3">
+            <div class="lg:col-span-2 rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+              <div class="text-base font-semibold text-white">Quick stats</div>
+              <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                <div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                  <div class="text-xs text-slate-400">Portfolio items</div>
+                  <div class="mt-1 text-2xl font-semibold text-white">${escapeHtml(d.portfolio?.length || 0)}</div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                  <div class="text-xs text-slate-400">Active discounts</div>
+                  <div class="mt-1 text-2xl font-semibold text-white">${escapeHtml(activeDiscounts)}</div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                  <div class="text-xs text-slate-400">Inquiries</div>
+                  <div class="mt-1 text-2xl font-semibold text-white">${escapeHtml(d.inquiries?.length || 0)}</div>
+                </div>
+                <div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                  <div class="text-xs text-slate-400">Chat threads</div>
+                  <div class="mt-1 text-2xl font-semibold text-white">${escapeHtml(Object.keys(d.chat?.threads || {}).length)}</div>
+                </div>
+              </div>
+
+              <div class="mt-6 flex flex-wrap gap-2">
+                <a href="#/admin/portfolio" class="focus-ring rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400">Add portfolio work</a>
+                <a href="#/admin/inbox" class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-slate-900">Reply to chat</a>
+                <a href="#/admin/site" class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-slate-900">Edit site text</a>
+              </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+              <div class="text-base font-semibold text-white">Site info</div>
+              <div class="mt-3 grid gap-2 text-sm text-slate-300">
+                <div><span class="text-slate-500">Brand:</span> ${escapeHtml(app.data.site.brandName)}</div>
+                <div><span class="text-slate-500">Tagline:</span> ${escapeHtml(app.data.site.tagline)}</div>
+                <div><span class="text-slate-500">Last update:</span> ${escapeHtml(lastUpdate)}</div>
+              </div>
+              <div class="mt-6 rounded-xl border border-amber-400/15 bg-amber-500/10 p-4 text-xs text-amber-100">
+                Reminder: Uploading large videos into localStorage can exceed browser limits. Prefer YouTube/MP4 URLs.
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderAdminPortfolio() {
+        const list = [...(app.data.portfolio || [])].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        const editingId = app.route.query.get('edit') || '';
+        const editing = editingId ? list.find(x => x.id === editingId) : null;
+
+        const row = (it) => {
+          const t = inferMediaTypeFromSrc(it.src).mediaType;
+          return `
+            <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/30 p-3">
+              <div class="flex items-center gap-3 min-w-0">
+                <div class="h-12 w-16 overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
+                  ${t === 'image'
+                    ? `<img src="${escapeHtml(it.src)}" alt="" class="h-full w-full object-cover" />`
+                    : `<div class="grid h-full w-full place-items-center text-xs text-slate-400">${escapeHtml(t || 'media')}</div>`}
+                </div>
+                <div class="min-w-0">
+                  <div class="truncate text-sm font-semibold text-white">${escapeHtml(it.title)}</div>
+                  <div class="truncate text-xs text-slate-400">${escapeHtml(it.category || 'Uncategorized')} • ${escapeHtml((t || '').toUpperCase())}</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <a class="focus-ring rounded-lg border border-slate-700 bg-slate-900/40 px-2.5 py-1.5 text-xs text-slate-200 hover:bg-slate-900" href="#/admin/portfolio?edit=${encodeURIComponent(it.id)}">Edit</a>
+                <button class="focus-ring rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-500/15" data-action="admin-delete-portfolio" data-id="${escapeHtml(it.id)}">Delete</button>
+              </div>
+            </div>
+          `;
+        };
+
+        const mediaPreview = (() => {
+          const pending = app.ui.portfolioDraftMedia;
+          const src = pending?.src || editing?.src || '';
+          if (!src) return '';
+          const inferred = pending?.mediaType ? { mediaType: pending.mediaType, src } : inferMediaTypeFromSrc(src);
+          const it = { title: editing?.title || 'Preview', src: inferred.src };
+          return `
+            <div class="mt-3 overflow-hidden rounded-xl border border-slate-800 bg-slate-950/30">
+              ${renderMedia(it, 'h-48')}
+            </div>
+          `;
+        })();
+
+        return `
+          <div class="grid gap-4 lg:grid-cols-5">
+            <div class="lg:col-span-2 rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <div class="text-sm font-semibold text-white">All portfolio items</div>
+                  <div class="mt-1 text-xs text-slate-400">Click Edit to load into the form.</div>
+                </div>
+                <a href="#/admin/portfolio" class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900">New</a>
+              </div>
+
+              <div class="mt-4 grid gap-2 max-h-[560px] overflow-y-auto pr-1 no-scrollbar">
+                ${list.length ? list.map(row).join('') : `<div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4 text-sm text-slate-300">No portfolio items yet.</div>`}
+              </div>
+            </div>
+
+            <div class="lg:col-span-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-semibold text-white">${editing ? 'Edit item' : 'Add new item'}</div>
+                  <div class="mt-1 text-xs text-slate-400">Upload image/video (small) or paste a URL (recommended for videos).</div>
+                </div>
+                ${editing ? `<a href="#/admin/portfolio" class="text-xs text-slate-300 hover:text-white">Clear</a>` : ''}
+              </div>
+
+              <form id="form-admin-portfolio" class="mt-4 grid gap-3">
+                <input type="hidden" name="id" value="${escapeHtml(editing?.id || '')}" />
+
+                <div class="grid gap-3 md:grid-cols-2">
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Title</span>
+                    <input name="title" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(editing?.title || '')}" required />
+                  </label>
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Category</span>
+                    <input name="category" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(editing?.category || '')}" placeholder="Branding / Print / Motion…" />
+                  </label>
+                </div>
+
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Description</span>
+                  <textarea name="description" rows="3" class="focus-ring resize-none rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="Short details…">${escapeHtml(editing?.description || '')}</textarea>
+                </label>
+
+                <div class="grid gap-3 md:grid-cols-2">
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Media URL (image / mp4 / YouTube)</span>
+                    <input name="mediaUrl" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(editing?.src || '')}" placeholder="https://…" />
+                    <span class="text-[11px] text-slate-500">If you upload a file below, it overrides this URL.</span>
+                  </label>
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Upload file (small)</span>
+                    <input id="portfolio-media-file" type="file" accept="image/*,video/*" class="focus-ring w-full rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" />
+                    <span class="text-[11px] text-slate-500">Tip: Use URL for videos to avoid storage limits.</span>
+                  </label>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-2">
+                  <button class="focus-ring rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400" type="submit">${editing ? 'Save changes' : 'Add item'}</button>
+                  <button class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-slate-900" type="button" data-action="admin-clear-portfolio-media">Clear uploaded file</button>
+                </div>
+
+                ${mediaPreview}
+              </form>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderAdminServices() {
+        const list = [...(app.data.services || [])];
+        const editingId = app.route.query.get('edit') || '';
+        const editing = editingId ? list.find(x => x.id === editingId) : null;
+
+        const row = (s) => `
+          <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/30 p-3">
+            <div class="min-w-0">
+              <div class="truncate text-sm font-semibold text-white">${escapeHtml(s.name)}</div>
+              <div class="truncate text-xs text-slate-400">${escapeHtml(fmtMoney(s.price, s.currency))} • ${s.popular ? 'Popular' : 'Standard'}</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <a class="focus-ring rounded-lg border border-slate-700 bg-slate-900/40 px-2.5 py-1.5 text-xs text-slate-200 hover:bg-slate-900" href="#/admin/services?edit=${encodeURIComponent(s.id)}">Edit</a>
+              <button class="focus-ring rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-500/15" data-action="admin-delete-service" data-id="${escapeHtml(s.id)}">Delete</button>
+            </div>
+          </div>
+        `;
+
+        return `
+          <div class="grid gap-4 lg:grid-cols-5">
+            <div class="lg:col-span-2 rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <div class="text-sm font-semibold text-white">Services</div>
+                  <div class="mt-1 text-xs text-slate-400">Packages shown on the Services page.</div>
+                </div>
+                <a href="#/admin/services" class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900">New</a>
+              </div>
+              <div class="mt-4 grid gap-2">
+                ${list.length ? list.map(row).join('') : `<div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4 text-sm text-slate-300">No services yet.</div>`}
+              </div>
+            </div>
+
+            <div class="lg:col-span-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+              <div class="text-sm font-semibold text-white">${editing ? 'Edit service' : 'Add service'}</div>
+
+              <form id="form-admin-service" class="mt-4 grid gap-3">
+                <input type="hidden" name="id" value="${escapeHtml(editing?.id || '')}" />
+                <div class="grid gap-3 md:grid-cols-2">
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Name</span>
+                    <input name="name" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(editing?.name || '')}" required />
+                  </label>
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Price</span>
+                    <input name="price" type="number" min="0" step="1" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(editing?.price ?? '')}" required />
+                  </label>
+                </div>
+
+                <div class="grid gap-3 md:grid-cols-2">
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Currency symbol</span>
+                    <input name="currency" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(editing?.currency || '$')}" />
+                  </label>
+                  <label class="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2">
+                    <input name="popular" type="checkbox" class="h-4 w-4" ${editing?.popular ? 'checked' : ''} />
+                    <span class="text-sm text-slate-200">Mark as popular</span>
+                  </label>
+                </div>
+
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Description</span>
+                  <textarea name="description" rows="3" class="focus-ring resize-none rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm">${escapeHtml(editing?.description || '')}</textarea>
+                </label>
+
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Bullets (one per line)</span>
+                  <textarea name="bullets" rows="4" class="focus-ring resize-none rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="e.g.\n2 concepts\n2 revisions\nPNG/SVG">${escapeHtml((editing?.bullets || []).join('\n'))}</textarea>
+                </label>
+
+                <div class="flex flex-wrap gap-2">
+                  <button class="focus-ring rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400" type="submit">${editing ? 'Save changes' : 'Add service'}</button>
+                  ${editing ? `<a href="#/admin/services" class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-slate-900">Cancel</a>` : ''}
+                </div>
+              </form>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderAdminDiscounts() {
+        const list = [...(app.data.discounts || [])];
+        const editingId = app.route.query.get('edit') || '';
+        const editing = editingId ? list.find(x => x.id === editingId) : null;
+
+        const row = (d) => `
+          <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/30 p-3">
+            <div class="min-w-0">
+              <div class="truncate text-sm font-semibold text-white">${escapeHtml(d.title || 'Discount')}</div>
+              <div class="truncate text-xs text-slate-400">${escapeHtml(d.percent)}% • ${escapeHtml(d.code)} • until ${escapeHtml(d.until || '—')} • ${d.active ? 'Active' : 'Off'}</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <a class="focus-ring rounded-lg border border-slate-700 bg-slate-900/40 px-2.5 py-1.5 text-xs text-slate-200 hover:bg-slate-900" href="#/admin/discounts?edit=${encodeURIComponent(d.id)}">Edit</a>
+              <button class="focus-ring rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-500/15" data-action="admin-delete-discount" data-id="${escapeHtml(d.id)}">Delete</button>
+            </div>
+          </div>
+        `;
+
+        return `
+          <div class="grid gap-4 lg:grid-cols-5">
+            <div class="lg:col-span-2 rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <div class="text-sm font-semibold text-white">Discounts</div>
+                  <div class="mt-1 text-xs text-slate-400">Shown on the Discounts page + Home banner.</div>
+                </div>
+                <a href="#/admin/discounts" class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900">New</a>
+              </div>
+              <div class="mt-4 grid gap-2">
+                ${list.length ? list.map(row).join('') : `<div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4 text-sm text-slate-300">No discounts yet.</div>`}
+              </div>
+            </div>
+
+            <div class="lg:col-span-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+              <div class="text-sm font-semibold text-white">${editing ? 'Edit discount' : 'Add discount'}</div>
+
+              <form id="form-admin-discount" class="mt-4 grid gap-3">
+                <input type="hidden" name="id" value="${escapeHtml(editing?.id || '')}" />
+
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Title</span>
+                  <input name="title" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(editing?.title || '')}" required />
+                </label>
+
+                <div class="grid gap-3 md:grid-cols-3">
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Percent off</span>
+                    <input name="percent" type="number" min="1" max="99" step="1" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(editing?.percent ?? '')}" required />
+                  </label>
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Code</span>
+                    <input name="code" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm font-mono" value="${escapeHtml(editing?.code || '')}" required />
+                  </label>
+                  <label class="grid gap-1">
+                    <span class="text-xs text-slate-300">Valid until</span>
+                    <input name="until" type="date" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(editing?.until || '')}" />
+                  </label>
+                </div>
+
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Details</span>
+                  <textarea name="details" rows="3" class="focus-ring resize-none rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm">${escapeHtml(editing?.details || '')}</textarea>
+                </label>
+
+                <label class="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2">
+                  <input name="active" type="checkbox" class="h-4 w-4" ${editing ? (editing.active ? 'checked' : '') : 'checked'} />
+                  <span class="text-sm text-slate-200">Active</span>
+                </label>
+
+                <div class="flex flex-wrap gap-2">
+                  <button class="focus-ring rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400" type="submit">${editing ? 'Save changes' : 'Add discount'}</button>
+                  ${editing ? `<a href="#/admin/discounts" class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-slate-900">Cancel</a>` : ''}
+                </div>
+              </form>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderAdminSite() {
+        const s = app.data.site;
+        const c = s.contact || {};
+        const so = s.socials || {};
+
+        return `
+          <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+            <div class="text-base font-semibold text-white">Site settings</div>
+            <div class="mt-2 text-sm text-slate-400">Update brand name, hero image, about text, and contact details.</div>
+
+            <form id="form-admin-site" class="mt-6 grid gap-4">
+              <div class="grid gap-3 md:grid-cols-2">
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Brand name</span>
+                  <input name="brandName" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(s.brandName || '')}" required />
+                </label>
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Tagline</span>
+                  <input name="tagline" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(s.tagline || '')}" />
+                </label>
+              </div>
+
+              <label class="grid gap-1">
+                <span class="text-xs text-slate-300">Hero image URL</span>
+                <input name="heroImageUrl" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(s.heroImageUrl || '')}" placeholder="https://images.unsplash.com/..." />
+              </label>
+
+              <label class="grid gap-1">
+                <span class="text-xs text-slate-300">About us</span>
+                <textarea name="about" rows="7" class="focus-ring resize-none rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm">${escapeHtml(s.about || '')}</textarea>
+              </label>
+
+              <div class="grid gap-3 md:grid-cols-3">
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Public email</span>
+                  <input name="contactEmail" type="email" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(c.email || '')}" />
+                </label>
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Phone</span>
+                  <input name="phone" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(c.phone || '')}" />
+                </label>
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Address</span>
+                  <input name="address" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(c.address || '')}" />
+                </label>
+              </div>
+
+              <label class="grid gap-1">
+                <span class="text-xs text-slate-300">WhatsApp link (optional)</span>
+                <input name="whatsapp" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(c.whatsapp || '')}" placeholder="https://wa.me/..." />
+              </label>
+
+              <div class="grid gap-3 md:grid-cols-3">
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Instagram URL</span>
+                  <input name="instagram" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(so.instagram || '')}" />
+                </label>
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">Behance URL</span>
+                  <input name="behance" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(so.behance || '')}" />
+                </label>
+                <label class="grid gap-1">
+                  <span class="text-xs text-slate-300">TikTok URL</span>
+                  <input name="tiktok" class="focus-ring rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" value="${escapeHtml(so.tiktok || '')}" />
+                </label>
+              </div>
+
+              <div class="flex flex-wrap gap-2">
+                <button class="focus-ring rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400" type="submit">Save settings</button>
+                <button class="focus-ring rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-sm font-semibold text-rose-200 hover:bg-rose-500/15" type="button" data-action="admin-reset-demo">Reset demo data</button>
+              </div>
+            </form>
+          </div>
+        `;
+      }
+
+      function renderAdminInquiries() {
+        const inquiries = [...(app.data.inquiries || [])].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+        const card = (q) => `
+          <article class="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="truncate text-sm font-semibold text-white">${escapeHtml(q.subject || 'Inquiry')}</div>
+                <div class="mt-1 text-xs text-slate-400">${escapeHtml(q.name || '')} • ${escapeHtml(q.email || '')} • ${escapeHtml(fmtDate(q.ts || now()))}</div>
+              </div>
+              <div class="flex items-center gap-2">
+                ${q.status === 'resolved'
+                  ? `<span class="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-200">Resolved</span>`
+                  : `<span class="rounded-full border border-amber-500/25 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-200">New</span>`}
+              </div>
+            </div>
+            <div class="mt-3 whitespace-pre-wrap text-sm text-slate-300">${escapeHtml(q.message || '')}</div>
+            <div class="mt-4 flex flex-wrap gap-2">
+              ${q.status !== 'resolved'
+                ? `<button class="focus-ring rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-white ring-1 ring-slate-700 hover:bg-white/15" data-action="admin-resolve-inquiry" data-id="${escapeHtml(q.id)}">Mark resolved</button>`
+                : ''}
+              <button class="focus-ring rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-200 hover:bg-rose-500/15" data-action="admin-delete-inquiry" data-id="${escapeHtml(q.id)}">Delete</button>
+            </div>
+          </article>
+        `;
+
+        return `
+          <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+            <div class="text-base font-semibold text-white">Inquiries</div>
+            <div class="mt-2 text-sm text-slate-400">Messages from the Home quick quote and Contact form.</div>
+
+            <div class="mt-6 grid gap-4">
+              ${inquiries.length ? inquiries.map(card).join('') : `<div class="rounded-xl border border-slate-800 bg-slate-950/30 p-5 text-sm text-slate-300">No inquiries yet.</div>`}
+            </div>
+          </div>
+        `;
+      }
+
+      function renderAdminInbox() {
+        const threads = Object.values(app.data.chat?.threads || {}).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        const selected = app.route.query.get('t') || (threads[0]?.id || '');
+        const thread = selected ? (app.data.chat.threads[selected] || null) : null;
+
+        const unreadCount = (t) => {
+          const last = t.adminLastReadAt || 0;
+          return (t.messages || []).filter(m => m.from === 'client' && m.ts > last).length;
+        };
+
+        const row = (t) => {
+          const isOn = t.id === selected;
+          const unread = unreadCount(t);
+          const cls = isOn ? 'border-amber-400/30 bg-amber-500/10' : 'border-slate-800 bg-slate-950/30 hover:bg-slate-950/40';
+          return `
+            <a href="#/admin/inbox?t=${encodeURIComponent(t.id)}" class="block rounded-xl border ${cls} p-3">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="truncate text-sm font-semibold text-white">${escapeHtml(t.name || 'Client')}</div>
+                  <div class="truncate text-xs text-slate-400">${escapeHtml(t.email || t.id)}</div>
+                </div>
+                ${unread ? `<span class="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-100">${unread}</span>` : ''}
+              </div>
+              <div class="mt-2 text-[11px] text-slate-500">Updated: ${escapeHtml(fmtDate(t.updatedAt || t.createdAt || now()))}</div>
+            </a>
+          `;
+        };
+
+        const msgBubble = (m) => {
+          const mine = m.from === 'admin';
+          const align = mine ? 'justify-end' : 'justify-start';
+          const bubble = mine ? 'bg-amber-500/10 border-amber-400/20 text-amber-50' : 'bg-slate-900/60 border-slate-700 text-slate-100';
+          const who = mine ? 'Admin' : 'Client';
+          return `
+            <div class="flex ${align}">
+              <div class="max-w-[88%] rounded-2xl border ${bubble} px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-[11px] font-semibold text-slate-200/90">${escapeHtml(who)}</div>
+                  <div class="text-[11px] text-slate-400">${escapeHtml(fmtTime(m.ts))}</div>
+                </div>
+                <div class="mt-1 whitespace-pre-wrap text-sm leading-relaxed">${escapeHtml(m.text)}</div>
+              </div>
+            </div>
+          `;
+        };
+
+        const messagesHtml = thread
+          ? (thread.messages || []).map(msgBubble).join('')
+          : `<div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4 text-sm text-slate-300">No thread selected.</div>`;
+
+        return `
+          <div class="grid gap-4 lg:grid-cols-5">
+            <div class="lg:col-span-2 rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+              <div class="text-sm font-semibold text-white">Threads</div>
+              <div class="mt-1 text-xs text-slate-400">Client messages grouped by email.</div>
+              <div class="mt-4 grid gap-2 max-h-[560px] overflow-y-auto pr-1 no-scrollbar">
+                ${threads.length ? threads.map(row).join('') : `<div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4 text-sm text-slate-300">No chats yet.</div>`}
+              </div>
+            </div>
+
+            <div class="lg:col-span-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-semibold text-white">Conversation</div>
+                  <div class="mt-1 text-xs text-slate-400">${thread ? `${escapeHtml(thread.name || 'Client')} • ${escapeHtml(thread.email || thread.id)}` : '—'}</div>
+                </div>
+                ${thread ? `<button class="focus-ring rounded-xl border border-slate-700 bg-slate-900/30 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900" data-action="admin-mark-read" data-id="${escapeHtml(thread.id)}">Mark read</button>` : ''}
+              </div>
+
+              <div id="admin-chat-messages" class="no-scrollbar mt-4 h-[420px] overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                <div class="grid gap-3">${messagesHtml}</div>
+              </div>
+
+              <form id="form-admin-chat-reply" class="mt-4 flex gap-2">
+                <input type="hidden" name="threadId" value="${escapeHtml(thread?.id || '')}" />
+                <input name="text" class="focus-ring w-full rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" placeholder="Write a reply…" ${thread ? '' : 'disabled'} required />
+                <button class="focus-ring rounded-xl bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50" type="submit" ${thread ? '' : 'disabled'}>Reply</button>
+              </form>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderAdminBackup() {
+        return `
+          <div class="grid gap-4 lg:grid-cols-2">
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+              <div class="text-base font-semibold text-white">Export</div>
+              <div class="mt-2 text-sm text-slate-300">Download your current site data (portfolio, services, discounts, chats, inquiries) as JSON.</div>
+              <button class="focus-ring mt-4 rounded-xl bg-white/10 px-4 py-2.5 text-sm font-semibold text-white ring-1 ring-slate-700 hover:bg-white/15" data-action="admin-export-json">Download JSON</button>
+            </div>
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+              <div class="text-base font-semibold text-white">Import</div>
+              <div class="mt-2 text-sm text-slate-300">Upload a JSON backup to restore your site data.</div>
+              <div class="mt-4 grid gap-2">
+                <input id="admin-import-file" type="file" accept="application/json" class="focus-ring w-full rounded-xl border border-slate-700 bg-slate-950/40 px-3 py-2 text-sm" />
+                <button class="focus-ring rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-sm font-semibold text-rose-200 hover:bg-rose-500/15" data-action="admin-import-json">Import & replace current data</button>
+              </div>
+              <div class="mt-3 text-xs text-slate-500">Import overwrites current content in this browser.</div>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderNotFound() {
+        return `
+          <section class="mx-auto max-w-4xl px-4 py-12">
+            <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+              <div class="text-lg font-semibold text-white">Page not found</div>
+              <div class="mt-2 text-sm text-slate-300">That route doesn’t exist.</div>
+              <a href="#/home" class="mt-5 inline-flex focus-ring rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400">Go home</a>
+            </div>
+          </section>
+        `;
+      }
+
+      // ----------------- Export views API -----------------
+      window.GDShopViews = {
+        renderToast,
+        renderNav,
+        renderFooter,
+        renderHome,
+        renderPortfolio,
+        renderServices,
+        renderDiscounts,
+        renderAbout,
+        renderContact,
+        renderChat,
+        renderAuth,
+        renderAdmin,
+        renderNotFound
+      };
+    })();
+  </script>
+
+  <!-- =====================
+       JavaScript Module #3: CONTROLLER (routing, events, app flow)
+       ===================== -->
+  <script>
+    (() => {
+      'use strict';
+
+      const Core = window.GDShopCore;
+      const Views = window.GDShopViews;
+
+      const {
+        ADMIN_EMAIL,
+        STORAGE_KEYS,
+        app,
+        uid,
+        now,
+        parseRoute,
+        ensureAdminGuard,
+        escapeHtml,
+        trySaveData,
+        inferMediaTypeFromSrc,
+        fmtDate,
+        getData,
+        getAccounts,
+        getSession,
+        setSession,
+        clearSession,
+        seedData,
+        loadJSON,
+        saveJSON,
+        sha256Hex,
+        isAdminEmail,
+        showToast,
+        getOrCreateThread,
+        addMessageToThread,
+        go
+      } = Core;
+
+      function renderMain() {
+        switch (app.route.path) {
+          case '/home':
+          case '/':
+            return Views.renderHome();
+          case '/portfolio':
+            return Views.renderPortfolio();
+          case '/services':
+            return Views.renderServices();
+          case '/discounts':
+            return Views.renderDiscounts();
+          case '/about':
+            return Views.renderAbout();
+          case '/contact':
+            return Views.renderContact();
+          case '/chat':
+            return Views.renderChat();
+          case '/auth':
+            return Views.renderAuth();
+          case '/admin':
+          case '/admin/overview':
+          case '/admin/portfolio':
+          case '/admin/services':
+          case '/admin/discounts':
+          case '/admin/site':
+          case '/admin/inquiries':
+          case '/admin/inbox':
+          case '/admin/backup':
+            return Views.renderAdmin();
+          default:
+            if (app.route.path.startsWith('/admin')) return Views.renderAdmin();
+            return Views.renderNotFound();
+        }
+      }
+
+      function render() {
+        app.route = parseRoute();
+        if (ensureAdminGuard()) return;
+
+        const root = document.getElementById('app');
+
+        const titleBase = app.data.site.brandName || 'Graphic Design Shop';
+        const pageTitle = (() => {
+          const p = app.route.path;
+          if (p === '/home' || p === '/') return 'Home';
+          if (p === '/portfolio') return 'Portfolio';
+          if (p === '/services') return 'Services';
+          if (p === '/discounts') return 'Discounts';
+          if (p === '/about') return 'About';
+          if (p === '/contact') return 'Contact';
+          if (p === '/chat') return 'Chat';
+          if (p.startsWith('/admin')) return 'Admin';
+          if (p === '/auth') return 'Account';
+          return 'Page';
+        })();
+        document.title = `${pageTitle} • ${titleBase}`;
+
+        root.innerHTML = `
+          ${Views.renderToast()}
+          <div class="min-h-screen flex flex-col">
+            ${Views.renderNav()}
+            <main class="flex-1">${renderMain()}</main>
+            ${Views.renderFooter()}
+          </div>
+        `;
+
+        // Auto-scroll chat boxes to bottom
+        const chatBox = document.getElementById('chat-messages');
+        if (chatBox) chatBox.scrollTop = chatBox.scrollHeight;
+        const adminChatBox = document.getElementById('admin-chat-messages');
+        if (adminChatBox) adminChatBox.scrollTop = adminChatBox.scrollHeight;
+      }
+
+      // Connect toast rendering to the controller's render()
+      Core.setRender(render);
+
+      // ----------------- Events: click -----------------
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const action = btn.dataset.action;
+
+        if (action === 'toggle-mobile') {
+          app.ui.mobileOpen = !app.ui.mobileOpen;
+          render();
+          return;
+        }
+
+        if (action === 'dismiss-toast') {
+          app.toast = null;
+          render();
+          return;
+        }
+
+        if (action === 'signout') {
+          clearSession();
+          app.session = getSession();
+          app.ui.mobileOpen = false;
+          showToast('Signed out.', 'success');
+          go('/home');
+          return;
+        }
+
+        if (action === 'set-portfolio-filter') {
+          app.ui.portfolioFilter = btn.dataset.filter || 'All';
+          render();
+          return;
+        }
+
+        if (action === 'chat-prompt') {
+          const t = String(btn.dataset.text || '').trim();
+          const input = document.querySelector('#form-chat-send input[name="text"]');
+          if (input && !input.disabled) {
+            input.value = t;
+            input.focus();
+          } else {
+            showToast('Open a chat first (enter name + email).', 'info');
+          }
+          return;
+        }
+
+        if (action === 'admin-clear-portfolio-media') {
+          app.ui.portfolioDraftMedia = null;
+          showToast('Cleared uploaded media draft.', 'success');
+          render();
+          return;
+        }
+
+        if (action === 'admin-delete-portfolio') {
+          const id = btn.dataset.id;
+          if (!id) return;
+          if (!confirm('Delete this portfolio item?')) return;
+          app.data.portfolio = (app.data.portfolio || []).filter(x => x.id !== id);
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save (storage full). Try removing large uploads.', 'error');
+            return;
+          }
+          showToast('Deleted portfolio item.', 'success');
+          go('/admin/portfolio');
+          return;
+        }
+
+        if (action === 'admin-delete-service') {
+          const id = btn.dataset.id;
+          if (!id) return;
+          if (!confirm('Delete this service?')) return;
+          app.data.services = (app.data.services || []).filter(x => x.id !== id);
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save changes.', 'error');
+            return;
+          }
+          showToast('Deleted service.', 'success');
+          go('/admin/services');
+          return;
+        }
+
+        if (action === 'admin-delete-discount') {
+          const id = btn.dataset.id;
+          if (!id) return;
+          if (!confirm('Delete this discount?')) return;
+          app.data.discounts = (app.data.discounts || []).filter(x => x.id !== id);
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save changes.', 'error');
+            return;
+          }
+          showToast('Deleted discount.', 'success');
+          go('/admin/discounts');
+          return;
+        }
+
+        if (action === 'admin-resolve-inquiry') {
+          const id = btn.dataset.id;
+          const q = (app.data.inquiries || []).find(x => x.id === id);
+          if (!q) return;
+          q.status = 'resolved';
+          q.resolvedAt = now();
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save changes.', 'error');
+            return;
+          }
+          showToast('Inquiry marked as resolved.', 'success');
+          render();
+          return;
+        }
+
+        if (action === 'admin-delete-inquiry') {
+          const id = btn.dataset.id;
+          if (!id) return;
+          if (!confirm('Delete this inquiry?')) return;
+          app.data.inquiries = (app.data.inquiries || []).filter(x => x.id !== id);
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save changes.', 'error');
+            return;
+          }
+          showToast('Inquiry deleted.', 'success');
+          render();
+          return;
+        }
+
+        if (action === 'admin-mark-read') {
+          const id = btn.dataset.id;
+          const t = app.data.chat.threads[id];
+          if (!t) return;
+          t.adminLastReadAt = now();
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save changes.', 'error');
+            return;
+          }
+          showToast('Marked as read.', 'success');
+          render();
+          return;
+        }
+
+        if (action === 'admin-export-json') {
+          const blob = new Blob([JSON.stringify(app.data, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `gdshop-backup-${new Date().toISOString().slice(0, 10)}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          showToast('Downloaded JSON backup.', 'success');
+          return;
+        }
+
+        if (action === 'admin-import-json') {
+          const input = document.getElementById('admin-import-file');
+          const file = input?.files?.[0];
+          if (!file) {
+            showToast('Choose a JSON file first.', 'info');
+            return;
+          }
+          if (!confirm('Import will overwrite ALL current data in this browser. Continue?')) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              const parsed = JSON.parse(String(reader.result || ''));
+              if (!parsed || typeof parsed !== 'object') throw new Error('Invalid JSON');
+              parsed.version = 1;
+              parsed.updatedAt = now();
+              const err = trySaveData(parsed);
+              if (err) {
+                showToast('Import failed (storage issue).', 'error');
+                return;
+              }
+              app.data = getData();
+              showToast('Imported backup successfully.', 'success');
+              go('/admin/overview');
+            } catch {
+              showToast('Invalid JSON file.', 'error');
+            }
+          };
+          reader.readAsText(file);
+          return;
+        }
+
+        if (action === 'admin-reset-demo') {
+          if (!confirm('Reset everything to demo defaults? This removes uploads/messages in this browser.')) return;
+          const seeded = seedData();
+          const err = trySaveData(seeded);
+          if (err) {
+            showToast('Could not reset (storage issue).', 'error');
+            return;
+          }
+          app.data = getData();
+          app.ui.portfolioDraftMedia = null;
+          showToast('Reset to demo data.', 'success');
+          go('/admin/overview');
+          return;
+        }
+      });
+
+      // ----------------- Events: file inputs -----------------
+      document.addEventListener('change', (e) => {
+        const input = e.target;
+        if (input && input.id === 'portfolio-media-file') {
+          const file = input.files?.[0];
+          if (!file) return;
+
+          const maxBytes = 3.5 * 1024 * 1024; // ~3.5 MB recommended for localStorage
+          if (file.size > maxBytes) {
+            showToast('File is large. Prefer URLs for videos/large images (localStorage may fail).', 'info');
+          }
+
+          const mediaType = file.type.startsWith('video/') ? 'video' : 'image';
+          const reader = new FileReader();
+          reader.onload = () => {
+            app.ui.portfolioDraftMedia = { mediaType, src: String(reader.result || '') };
+            showToast('File loaded. Save to store it.', 'success');
+            render();
+          };
+          reader.onerror = () => showToast('Could not read file.', 'error');
+          reader.readAsDataURL(file);
+        }
+      });
+
+      // ----------------- Events: forms -----------------
+      document.addEventListener('submit', async (e) => {
+        const form = e.target;
+
+        if (form && form.id === 'form-quick-quote') {
+          e.preventDefault();
+          const fd = new FormData(form);
+          const entry = {
+            id: uid(),
+            kind: 'quote',
+            name: String(fd.get('name') || '').trim(),
+            email: String(fd.get('email') || '').trim(),
+            subject: `Quick quote — ${String(fd.get('service') || 'Project')}`,
+            message: String(fd.get('message') || '').trim(),
+            status: 'new',
+            ts: now()
+          };
+          app.data.inquiries = app.data.inquiries || [];
+          app.data.inquiries.push(entry);
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save request (storage full).', 'error');
+            return;
+          }
+          form.reset();
+          showToast('Request saved! We’ll reply soon (demo). Try Chat for fastest.', 'success');
+          return;
+        }
+
+        if (form && form.id === 'form-contact') {
+          e.preventDefault();
+          const fd = new FormData(form);
+          const entry = {
+            id: uid(),
+            kind: 'contact',
+            name: String(fd.get('name') || '').trim(),
+            email: String(fd.get('email') || '').trim(),
+            subject: String(fd.get('subject') || '').trim(),
+            message: String(fd.get('message') || '').trim(),
+            status: 'new',
+            ts: now()
+          };
+          app.data.inquiries = app.data.inquiries || [];
+          app.data.inquiries.push(entry);
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save message (storage full).', 'error');
+            return;
+          }
+          form.reset();
+          showToast('Message saved! Admin can view it in Inquiries.', 'success');
+          return;
+        }
+
+        if (form && form.id === 'form-chat-identify') {
+          e.preventDefault();
+          const fd = new FormData(form);
+          const name = String(fd.get('name') || '').trim();
+          const email = String(fd.get('email') || '').trim();
+          if (!email) {
+            showToast('Email is required for chat.', 'error');
+            return;
+          }
+          const thread = getOrCreateThread(name, email);
+          saveJSON(STORAGE_KEYS.chatIdentity, { name, email, lastThreadId: thread.id });
+          thread.clientLastReadAt = now();
+          app.data.updatedAt = now();
+          trySaveData(app.data);
+          showToast('Chat opened.', 'success');
+          render();
+          return;
+        }
+
+        if (form && form.id === 'form-chat-send') {
+          e.preventDefault();
+          const id = loadJSON(STORAGE_KEYS.chatIdentity, null)?.lastThreadId;
+          const thread = id ? app.data.chat.threads[id] : null;
+          if (!thread) {
+            showToast('Open a chat first.', 'info');
+            return;
+          }
+          const fd = new FormData(form);
+          const text = String(fd.get('text') || '').trim();
+          if (!text) return;
+          try {
+            addMessageToThread(thread.id, 'client', text);
+          } catch {
+            showToast('Could not send (storage full).', 'error');
+            return;
+          }
+          form.reset();
+          showToast('Sent.', 'success');
+          render();
+          return;
+        }
+
+        if (form && form.id === 'form-admin-chat-reply') {
+          e.preventDefault();
+          const fd = new FormData(form);
+          const threadId = String(fd.get('threadId') || '');
+          const text = String(fd.get('text') || '').trim();
+          if (!threadId) return;
+          if (!text) return;
+          try {
+            addMessageToThread(threadId, 'admin', text);
+            const t = app.data.chat.threads[threadId];
+            if (t) t.adminLastReadAt = now();
+            trySaveData(app.data);
+          } catch {
+            showToast('Could not send reply (storage full).', 'error');
+            return;
+          }
+          form.reset();
+          showToast('Reply sent.', 'success');
+          render();
+          return;
+        }
+
+        if (form && form.id === 'form-signup') {
+          e.preventDefault();
+          const fd = new FormData(form);
+          const email = String(fd.get('email') || '').trim().toLowerCase();
+          const password = String(fd.get('password') || '');
+
+          const accounts = getAccounts();
+          accounts.users = accounts.users || {};
+          if (accounts.users[email]) {
+            showToast('Account already exists. Try signing in.', 'info');
+            go('/auth?mode=signin');
+            return;
+          }
+          const salt = uid();
+          const hash = await sha256Hex(salt + ':' + password);
+          accounts.users[email] = { email, salt, hash, createdAt: now() };
+          saveJSON(STORAGE_KEYS.accounts, accounts);
+
+          setSession(email);
+          app.accounts = getAccounts();
+          app.session = getSession();
+
+          const next = app.route.query.get('next');
+          showToast(isAdminEmail(email) ? 'Admin account created & signed in.' : 'Account created & signed in.', 'success');
+          go(next ? decodeURIComponent(next) : '/home');
+          return;
+        }
+
+        if (form && form.id === 'form-signin') {
+          e.preventDefault();
+          const fd = new FormData(form);
+          const email = String(fd.get('email') || '').trim().toLowerCase();
+          const password = String(fd.get('password') || '');
+
+          const accounts = getAccounts();
+          const user = accounts.users?.[email];
+          if (!user) {
+            showToast('No account found. Create one first.', 'info');
+            go('/auth?mode=signup');
+            return;
+          }
+
+          const hash = await sha256Hex(user.salt + ':' + password);
+          if (hash !== user.hash) {
+            showToast('Wrong password.', 'error');
+            return;
+          }
+
+          setSession(email);
+          app.accounts = getAccounts();
+          app.session = getSession();
+
+          const next = app.route.query.get('next');
+          showToast(isAdminEmail(email) ? 'Signed in as admin.' : 'Signed in.', 'success');
+          go(next ? decodeURIComponent(next) : '/home');
+          return;
+        }
+
+        if (form && form.id === 'form-admin-portfolio') {
+          e.preventDefault();
+          const fd = new FormData(form);
+          const id = String(fd.get('id') || '').trim();
+          const title = String(fd.get('title') || '').trim();
+          const category = String(fd.get('category') || '').trim() || 'Uncategorized';
+          const description = String(fd.get('description') || '').trim();
+          const mediaUrl = String(fd.get('mediaUrl') || '').trim();
+
+          let finalSrc = mediaUrl;
+          let mediaType = null;
+
+          if (app.ui.portfolioDraftMedia?.src) {
+            finalSrc = app.ui.portfolioDraftMedia.src;
+            mediaType = app.ui.portfolioDraftMedia.mediaType;
+          }
+
+          const inferred = inferMediaTypeFromSrc(finalSrc);
+          mediaType = mediaType || inferred.mediaType;
+
+          if (!title) {
+            showToast('Title is required.', 'error');
+            return;
+          }
+          if (!finalSrc) {
+            showToast('Provide a Media URL or upload a file.', 'error');
+            return;
+          }
+
+          app.data.portfolio = app.data.portfolio || [];
+          if (id) {
+            const item = app.data.portfolio.find(x => x.id === id);
+            if (!item) {
+              showToast('Item not found.', 'error');
+              return;
+            }
+            item.title = title;
+            item.category = category;
+            item.description = description;
+            item.mediaType = mediaType;
+            item.src = inferred.mediaType === 'embed' ? inferred.src : finalSrc;
+          } else {
+            app.data.portfolio.push({
+              id: uid(),
+              title,
+              category,
+              description,
+              mediaType,
+              src: inferred.mediaType === 'embed' ? inferred.src : finalSrc,
+              createdAt: now()
+            });
+          }
+
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save. Storage may be full (use URLs for videos).', 'error');
+            return;
+          }
+
+          app.ui.portfolioDraftMedia = null;
+          showToast(id ? 'Portfolio item updated.' : 'Portfolio item added.', 'success');
+          go('/admin/portfolio');
+          return;
+        }
+
+        if (form && form.id === 'form-admin-service') {
+          e.preventDefault();
+          const fd = new FormData(form);
+          const id = String(fd.get('id') || '').trim();
+          const name = String(fd.get('name') || '').trim();
+          const price = Number(fd.get('price'));
+          const currency = String(fd.get('currency') || '$').trim() || '$';
+          const popular = !!fd.get('popular');
+          const description = String(fd.get('description') || '').trim();
+          const bulletsRaw = String(fd.get('bullets') || '');
+          const bullets = bulletsRaw.split(/\r?\n/).map(s => s.trim()).filter(Boolean).slice(0, 12);
+
+          if (!name || !Number.isFinite(price)) {
+            showToast('Name and price are required.', 'error');
+            return;
+          }
+
+          app.data.services = app.data.services || [];
+          if (id) {
+            const s = app.data.services.find(x => x.id === id);
+            if (!s) {
+              showToast('Service not found.', 'error');
+              return;
+            }
+            s.name = name;
+            s.price = price;
+            s.currency = currency;
+            s.popular = popular;
+            s.description = description;
+            s.bullets = bullets;
+          } else {
+            app.data.services.push({ id: uid(), name, price, currency, popular, description, bullets });
+          }
+
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save changes.', 'error');
+            return;
+          }
+
+          showToast(id ? 'Service updated.' : 'Service added.', 'success');
+          go('/admin/services');
+          return;
+        }
+
+        if (form && form.id === 'form-admin-discount') {
+          e.preventDefault();
+          const fd = new FormData(form);
+          const id = String(fd.get('id') || '').trim();
+          const title = String(fd.get('title') || '').trim();
+          const percent = Number(fd.get('percent'));
+          const code = String(fd.get('code') || '').trim().toUpperCase();
+          const until = String(fd.get('until') || '').trim();
+          const details = String(fd.get('details') || '').trim();
+          const active = !!fd.get('active');
+
+          if (!title || !Number.isFinite(percent) || !code) {
+            showToast('Title, percent, and code are required.', 'error');
+            return;
+          }
+
+          app.data.discounts = app.data.discounts || [];
+          if (id) {
+            const d = app.data.discounts.find(x => x.id === id);
+            if (!d) {
+              showToast('Discount not found.', 'error');
+              return;
+            }
+            d.title = title;
+            d.percent = percent;
+            d.code = code;
+            d.until = until;
+            d.details = details;
+            d.active = active;
+          } else {
+            app.data.discounts.push({ id: uid(), title, percent, code, until, details, active });
+          }
+
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save changes.', 'error');
+            return;
+          }
+
+          showToast(id ? 'Discount updated.' : 'Discount added.', 'success');
+          go('/admin/discounts');
+          return;
+        }
+
+        if (form && form.id === 'form-admin-site') {
+          e.preventDefault();
+          const fd = new FormData(form);
+          app.data.site.brandName = String(fd.get('brandName') || '').trim() || app.data.site.brandName;
+          app.data.site.tagline = String(fd.get('tagline') || '').trim();
+          app.data.site.heroImageUrl = String(fd.get('heroImageUrl') || '').trim();
+          app.data.site.about = String(fd.get('about') || '').trim();
+
+          app.data.site.contact = app.data.site.contact || {};
+          app.data.site.contact.email = String(fd.get('contactEmail') || '').trim();
+          app.data.site.contact.phone = String(fd.get('phone') || '').trim();
+          app.data.site.contact.address = String(fd.get('address') || '').trim();
+          app.data.site.contact.whatsapp = String(fd.get('whatsapp') || '').trim();
+
+          app.data.site.socials = app.data.site.socials || {};
+          app.data.site.socials.instagram = String(fd.get('instagram') || '').trim();
+          app.data.site.socials.behance = String(fd.get('behance') || '').trim();
+          app.data.site.socials.tiktok = String(fd.get('tiktok') || '').trim();
+
+          app.data.updatedAt = now();
+          const err = trySaveData(app.data);
+          if (err) {
+            showToast('Could not save changes.', 'error');
+            return;
+          }
+          showToast('Site settings saved.', 'success');
+          render();
+          return;
+        }
+      });
+
+      // ----------------- Router + cross-tab sync -----------------
+      window.addEventListener('hashchange', () => {
+        app.ui.mobileOpen = false;
+        render();
+      });
+
+      window.addEventListener('storage', (e) => {
+        if (![STORAGE_KEYS.data, STORAGE_KEYS.accounts, STORAGE_KEYS.session].includes(e.key)) return;
+        app.data = getData();
+        app.accounts = getAccounts();
+        app.session = getSession();
+        render();
+      });
+
+      // Initial render
+      render();
+
+      // Light polling for chat updates in same tab
+      setInterval(() => {
+        const prev = app.data.updatedAt;
+        const fresh = getData();
+        if (fresh.updatedAt !== prev) {
+          app.data = fresh;
+          render();
+        }
+      }, 1500);
+    })();
+  </script>
+</body>
+</html>
