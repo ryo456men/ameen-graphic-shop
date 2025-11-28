@@ -130,7 +130,15 @@
       }
 
       function isAdminEmail(email) {
-        return String(email || '').trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
+        const normalized = String(email || '').trim().toLowerCase();
+        const primary = PRIMARY_ADMIN_EMAIL.toLowerCase();
+        const secondary = SECONDARY_ADMIN_EMAIL.toLowerCase();
+        // PRIMARY_ADMIN_EMAIL has full authority, SECONDARY_ADMIN_EMAIL is backup only
+        return normalized === primary || normalized === secondary;
+      }
+
+      function isPrimaryAdmin(email) {
+        return String(email || '').trim().toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase();
       }
 
       function normalizeYouTubeUrl(url) {
@@ -338,7 +346,14 @@
 
       function userIsAdmin() {
         const user = currentUser();
-        return !!user && isAdminEmail(user.email);
+        if (!user) return false;
+        return isAdminEmail(user.email);
+      }
+
+      function userIsPrimaryAdmin() {
+        const user = currentUser();
+        if (!user) return false;
+        return isPrimaryAdmin(user.email);
       }
 
       function showToast(message, type = 'info') {
@@ -416,6 +431,8 @@
       // ----------------- Export core API -----------------
       window.GDShopCore = {
         ADMIN_EMAIL,
+        PRIMARY_ADMIN_EMAIL,
+        SECONDARY_ADMIN_EMAIL,
         STORAGE_KEYS,
         // util
         escapeHtml,
@@ -431,6 +448,7 @@
         parseRoute,
         go,
         isAdminEmail,
+        isPrimaryAdmin,
         normalizeYouTubeUrl,
         inferMediaTypeFromSrc,
         // data
@@ -448,6 +466,7 @@
         requestRender,
         currentUser,
         userIsAdmin,
+        userIsPrimaryAdmin,
         showToast,
         categoriesFromPortfolio,
         getActiveDiscounts,
