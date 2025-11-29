@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: gdshop-backend
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: GDSHOP_SECRET
+        value: changeme_secret_prod
+      - key: PORT
+        value: 4000
