@@ -2,7 +2,7 @@
 
 ## Deploying to Render (Free Hosting)
 
-Your backend is configured to auto-deploy on [Render](https://render.com), a free Node.js hosting platform.
+Your backend is configured to auto-deploy on [Render](https://render.com), a free Node.js hosting platform. A `Dockerfile` is included for reliable containerized deployment.
 
 ### Step 1: Connect Your GitHub Repo to Render
 
@@ -15,16 +15,14 @@ Your backend is configured to auto-deploy on [Render](https://render.com), a fre
 ### Step 2: Configure the Service
 
 - **Name:** `gdshop-backend` (or your choice)
-- **Environment:** Node
-- **Build Command:** `npm install`
-- **Start Command:** `node server.js`
+- **Environment:** Docker (Render will auto-detect the Dockerfile)
 - **Plan:** Free
 
 ### Step 3: Add Environment Variables
 
 Under **Environment**, add:
 - **GDSHOP_SECRET:** `changeme_secret_prod` (change to a strong secret)
-- **PORT:** `4000` (optional, Render assigns one automatically)
+- **PORT:** `4000` (optional)
 
 Click **Create Web Service** and wait ~2 minutes for deployment.
 
